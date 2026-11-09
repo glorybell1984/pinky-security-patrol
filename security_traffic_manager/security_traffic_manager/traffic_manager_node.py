@@ -299,8 +299,11 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.adapter.stop()
-        node.adapter.lamp_off()
+        try:
+            node.adapter.stop()
+            node.adapter.lamp_off()
+        except Exception:  # context already shut down by Ctrl+C
+            pass
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
