@@ -25,7 +25,7 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-
+            'fake_pinky = security_bringup.fake_pinky:main',
         ],
     },
 )

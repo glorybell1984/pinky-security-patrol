@@ -1,0 +1,22 @@
+# Perception settings for the REAL Pinky camera and LiDAR.
+# TODO(demo): confirm image_topic with `ros2 topic list | grep image` on the robot,
+# measure camera_offset_x, and set marker_size to your printed markers.
+perception:
+  ros__parameters:
+    image_topic: /camera/image_raw/compressed
+    image_compressed: true
+    scan_topic: /scan
+    global_frame: map
+    base_frame: base_footprint
+    camera_hfov: 1.085            # rad (about 62 deg)
+    camera_offset_x: 0.05         # m
+    camera_flip: false
+    aruco_dictionary: DICT_4X4_50
+    marker_size: 0.10             # m, black square side length
+    distance_source: auto         # auto | lidar | marker_size
+    lidar_window_deg: 3.0
+    lidar_yaw_offset: 0.0
+    max_detect_distance: 2.5
+    process_rate: 10.0
+    debug_image: true
+    debug_rate: 5.0

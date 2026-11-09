@@ -1,0 +1,22 @@
+# Fake Pinky world. Objects are marker_id, x, y triples.
+#   7: on the route near WP2 (use it for level 2 and for "pickup")
+#   3: near WP3
+#   5: near WP5 (use "remove 5" to test REMOVED)
+fake_pinky:
+  ros__parameters:
+    start_pose: [1.0, 2.6, 0.0]
+    linear_speed: 0.25
+    angular_speed: 1.5
+    map_size: [7.0, 5.0]
+    objects: [7.0, 3.3, 1.0,
+              3.0, 5.8, 3.4,
+              5.0, 1.8, 3.5]
+    carry_path: [4.6, 1.0, 5.8, 0.8, 6.4, 1.8]
+    person_speed: 0.2
+    hide_after_carry: 4.0
+    camera_hfov: 1.085
+    detect_range: 2.2
+    detect_noise: 0.02
+    detect_rate: 10.0
+    # Optional timed commands, e.g. ["90.0 pickup 7", "150.0 remove 5"]
+    scenario: [""]

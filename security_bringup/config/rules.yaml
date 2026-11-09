@@ -1,10 +1,19 @@
-/**:
+# Task manager rules (thresholds for object states and robot reactions).
+task_manager:
   ros__parameters:
-    same_object_radius: 0.3       # m
-    moving_threshold: 0.3         # m within moving_window
+    robot_id: pinky1
+    same_object_radius: 0.3       # m, "same place" on a later pass
+    moving_threshold: 0.3         # m away from the logged position
     moving_window: 2.0            # s
-    removed_frames: 15
-    max_detect_distance: 2.5      # m
+    moving_min_samples: 3         # detections beyond the threshold within the window
+    episode_gap: 3.0              # s without detection that ends one sighting
+    min_revisit_time: 20.0        # s between pass sightings before level 2
+    moving_gap: 10.0              # s; found elsewhere this soon after a sighting = moving
+    removed_frames: 15            # in-view frames without detection -> REMOVED
+    view_distance: 2.0            # m
+    camera_hfov: 1.085            # rad, must match the perception setting
     follow_distance: 0.7          # m
     lost_timeout: 5.0             # s
-    hold_duration: 5.0            # s, level 2
+    hold_duration: 5.0            # s, level 2 stop with blinking lamp
+    auto_start_patrol: true
+    log_dir: ~/patrol_logs

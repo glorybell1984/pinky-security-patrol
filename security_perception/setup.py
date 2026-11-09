@@ -21,7 +21,8 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'perception = security_perception.perception_node:main'
+            'perception = security_perception.perception_node:main',
+            'make_markers = security_perception.make_markers:main'
         ],
     },
 )
