@@ -8,6 +8,8 @@ Replaces Nav2, localization, the map server and perception:
     /perception/detections  ObjectDetectionArray for marked objects in the camera's view
     /fake_pinky/markers     MarkerArray (ground truth, for RViz)
     /fake_pinky/status      std_msgs/String JSON (objects and robot, for the dashboard)
+    /set_lamp, /set_emotion fake pinky_lamp_control / pinky_emotion servers
+                            (only when the pinky_pro workspace is sourced)
 
 Objects are controlled from the dashboard or a terminal:
     ros2 topic pub --once /fake_pinky/command std_msgs/msg/String "{data: 'pickup 7'}"
@@ -39,6 +41,13 @@ from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
 
 from security_interfaces.msg import ObjectDetection, ObjectDetectionArray
+
+try:  # Pinky's interfaces, to test the real lamp / LCD calls
+    from pinky_interfaces.srv import Emotion, SetLamp
+except ImportError:
+    Emotion = SetLamp = None
+
+LAMP_MODES = {0: 'off', 1: 'on', 2: 'blink', 3: 'dimming'}
 
 
 def wrap(a):
@@ -140,6 +149,10 @@ class FakePinky(Node):
         self.create_subscription(Twist, f'{ns}/cmd_vel', self.on_cmd_vel, 10)
         self.create_subscription(String, '/fake_pinky/command', self.on_command, 10)
         self.create_subscription(String, g('lamp_topic'), self.on_lamp, 10)
+        if SetLamp is not None:
+            self.create_service(SetLamp, '/set_lamp', self.on_set_lamp, callback_group=self.cb)
+            self.create_service(Emotion, '/set_emotion', self.on_set_emotion,
+                                callback_group=self.cb)
 
         ActionServer(self, NavigateToPose, f'{ns}/navigate_to_pose', self.execute_nav,
                      goal_callback=lambda _: GoalResponse.ACCEPT,
@@ -218,6 +231,18 @@ class FakePinky(Node):
         if msg.data != self.lamp:
             self.lamp = msg.data
             self.get_logger().info(f'Lamp -> {self.lamp}')
+
+    def on_set_lamp(self, req, res):
+        c = req.color
+        self.get_logger().info(f'[set_lamp] {LAMP_MODES.get(req.mode, req.mode)} '
+                               f'rgb=({c.r:.1f},{c.g:.1f},{c.b:.1f}) time={req.time} ms')
+        res.result = True
+        return res
+
+    def on_set_emotion(self, req, res):
+        self.get_logger().info(f'[set_emotion] {req.emotion}')
+        res.response = 'ok'
+        return res
 
     def on_cmd_vel(self, msg):
         self.cmd = (msg.linear.x, msg.angular.z)

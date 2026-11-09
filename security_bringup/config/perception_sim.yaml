@@ -1,0 +1,23 @@
+# Perception settings for Pinky's own simulator (MuJoCo or Gazebo):
+#   ros2 launch pinky_bringup bringup_sim.launch.xml
+# The simulator publishes a raw image on /camera/image_raw.
+perception:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    image_compressed: false
+    scan_topic: /scan
+    global_frame: map
+    base_frame: base_footprint
+    camera_hfov: 1.1519
+    camera_offset_x: 0.035
+    camera_flip: false
+    aruco_dictionary: DICT_4X4_50
+    marker_size: 0.10
+    distance_source: auto
+    lidar_window_deg: 3.0
+    lidar_yaw_from_tf: true
+    lidar_yaw_offset: 3.14159
+    max_detect_distance: 2.5
+    process_rate: 5.0
+    debug_image: true
+    debug_rate: 3.0

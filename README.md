@@ -82,7 +82,8 @@ The full demo steps and the remaining real-robot checklist are in
 | Patrol loop, hold + turn to object, follow, lost track, pause / e-stop | Done, tested on fake Pinky |
 | ArUco perception (camera bearing + LiDAR / marker-size distance) | Done, tested with a synthetic image |
 | Dashboard (map, registry, event log, camera, controls, simulation) | Done |
-| Real camera topic, printed markers, map, waypoints, lamp bridge, tuning | **To do on the robot** |
+| Pinky Pro integration: camera publisher, `/set_lamp` lamp, `/set_emotion` LCD, LiDAR frame, URDF offsets | Done, checked against [pinky_pro](https://github.com/pinklab-art/pinky_pro) |
+| Camera orientation, printed markers, map, waypoints, threshold tuning | **To do on the robot** |
 
 ## Warning levels
 

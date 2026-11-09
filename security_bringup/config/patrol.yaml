@@ -9,8 +9,10 @@ traffic_manager:
     robot_id: pinky1
     namespace: ""                  # e.g. "/pinky1" if Nav2 runs in a namespace
     global_frame: map
-    base_frame: base_footprint
-    lamp_topic: /fleet/lamp
+    base_frame: base_footprint     # Pinky URDF root frame
+    lamp_topic: /fleet/lamp        # mode for the dashboard (OFF / BLINK / ON)
+    lamp_service: /set_lamp        # pinky_lamp_control on the robot, "" to disable
+    emotion_service: /set_emotion  # pinky_emotion LCD faces, "" to disable
     cmd_vel_topic: ""              # default: <namespace>/cmd_vel
     waypoints: [0.15, -3.61, 0.0,
                 0.94, -3.38, 90.0,

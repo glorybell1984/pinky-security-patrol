@@ -50,6 +50,8 @@ class TrafficManager(Node):
         p('global_frame', 'map')
         p('base_frame', 'base_footprint')
         p('lamp_topic', '/fleet/lamp')
+        p('lamp_service', '/set_lamp')          # pinky_lamp_control, '' to disable
+        p('emotion_service', '/set_emotion')    # pinky_emotion LCD faces, '' to disable
         p('cmd_vel_topic', '')
         p('waypoints', [0.0, 0.0, 0.0])
         p('nav_retry', 1)
@@ -63,7 +65,8 @@ class TrafficManager(Node):
         self.robot_id = g('robot_id')
         self.waypoints = parse_waypoints(list(g('waypoints')))
         self.adapter = RobotAdapter(self, g('namespace'), g('base_frame'), g('global_frame'),
-                                    g('lamp_topic'), g('cmd_vel_topic'), self.cb)
+                                    g('lamp_topic'), g('cmd_vel_topic'), self.cb,
+                                    g('lamp_service'), g('emotion_service'))
         self.patrol = PatrolExecutor(self.adapter, self.waypoints, self.emit,
                                      g('nav_retry'), g('waypoint_pause'))
         self.follow = FollowController(self.adapter, self.get_detection, self.emit,
@@ -297,6 +300,7 @@ def main(args=None):
         pass
     finally:
         node.adapter.stop()
+        node.adapter.lamp_off()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

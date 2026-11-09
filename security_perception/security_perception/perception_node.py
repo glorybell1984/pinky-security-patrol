@@ -46,14 +46,15 @@ class Perception(Node):
         p('scan_topic', '/scan')
         p('global_frame', 'map')
         p('base_frame', 'base_footprint')
-        p('camera_hfov', 1.085)            # rad; Raspberry Pi camera v2 is about 62 deg
-        p('camera_offset_x', 0.05)         # m, camera ahead of the base frame origin
+        p('camera_hfov', 1.1519)           # rad (66 deg), Pinky Pro sim camera; measure on the robot
+        p('camera_offset_x', 0.035)        # m, front_camera_link ahead of base_link (Pinky URDF)
         p('camera_flip', False)            # True if the image is upside down
         p('aruco_dictionary', 'DICT_4X4_50')
         p('marker_size', 0.10)             # m, printed marker side length
         p('distance_source', 'auto')       # auto | lidar | marker_size
         p('lidar_window_deg', 3.0)
-        p('lidar_yaw_offset', 0.0)         # rad, laser frame yaw relative to base
+        p('lidar_yaw_offset', 0.0)         # rad, laser frame yaw relative to base (fallback)
+        p('lidar_yaw_from_tf', True)       # read it from TF; Pinky's rplidar_link is turned 180 deg
         p('max_detect_distance', 2.5)
         p('process_rate', 10.0)            # Hz, frames per second to process
         p('debug_image', True)
@@ -69,6 +70,7 @@ class Perception(Node):
         self.distance_source = g('distance_source')
         self.lidar_window = math.radians(g('lidar_window_deg'))
         self.lidar_yaw_offset = g('lidar_yaw_offset')
+        self.lidar_yaw_from_tf = g('lidar_yaw_from_tf')
         self.max_dist = g('max_detect_distance')
         self.min_period = 1.0 / max(g('process_rate'), 0.1)
         self.debug_enabled = g('debug_image')
@@ -100,6 +102,15 @@ class Perception(Node):
     # ------------------------------------------------------------------ inputs
     def on_scan(self, msg):
         self.scan = msg
+        if self.lidar_yaw_from_tf and msg.header.frame_id:
+            try:
+                tf = self.tf_buffer.lookup_transform(self.base_frame, msg.header.frame_id, Time())
+            except TransformException:
+                return
+            self.lidar_yaw_offset = yaw_from_quaternion(tf.transform.rotation)
+            self.lidar_yaw_from_tf = False
+            self.get_logger().info(f'LiDAR frame {msg.header.frame_id} yaw '
+                                   f'{math.degrees(self.lidar_yaw_offset):.0f} deg from TF')
 
     def on_compressed(self, msg):
         if not self.ready_for_frame():

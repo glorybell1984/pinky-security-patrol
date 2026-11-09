@@ -38,7 +38,10 @@ Commands flow down (UI -> task manager -> traffic manager -> robot). Status flow
 | `/traffic/pause`, `/traffic/resume`, `/traffic/emergency_stop` | `std_srvs/Trigger` | UI -> traffic manager |
 | `/fleet/start_patrol`, `/fleet/stop_patrol`, `/fleet/stop_follow` | `std_srvs/Trigger` | UI -> task manager |
 | `/fleet/acknowledge_object` | `AcknowledgeObject` | UI -> task manager |
-| `/fleet/lamp` | `std_msgs/String` OFF/ON/BLINK | traffic manager -> robot lamp (bridge TODO) |
+| `/fleet/lamp` | `std_msgs/String` OFF/ON/BLINK | traffic manager -> dashboard |
+| `/set_lamp` | `pinky_interfaces/SetLamp` | traffic manager -> `pinky_lamp_control` (robot) |
+| `/set_emotion` | `pinky_interfaces/Emotion` | traffic manager -> `pinky_emotion` LCD (robot) |
+| `/camera/image_raw/compressed` | `CompressedImage` | `camera_publisher.py` (robot) -> perception |
 | TF `map -> suspicious_object_<id>` | static TF | task manager -> RViz |
 
 ## Object states

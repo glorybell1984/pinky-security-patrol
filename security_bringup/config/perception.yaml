@@ -1,21 +1,23 @@
-# Perception settings for the REAL Pinky camera and LiDAR.
-# TODO(demo): confirm image_topic with `ros2 topic list | grep image` on the robot,
-# measure camera_offset_x, and set marker_size to your printed markers.
+# Perception settings for the REAL Pinky Pro (laptop side).
+# The robot publishes the camera with security_perception/camera_publisher.py
+# (Pinky's own bringup has no camera node). Values below come from the
+# pinky_pro URDF; still check them on the robot (docs/demo_guide.md).
 perception:
   ros__parameters:
     image_topic: /camera/image_raw/compressed
     image_compressed: true
     scan_topic: /scan
     global_frame: map
-    base_frame: base_footprint
-    camera_hfov: 1.085            # rad (about 62 deg)
-    camera_offset_x: 0.05         # m
-    camera_flip: false
-    aruco_dictionary: DICT_4X4_50
-    marker_size: 0.10             # m, black square side length
-    distance_source: auto         # auto | lidar | marker_size
+    base_frame: base_footprint     # Pinky URDF root; AMCL also uses it
+    camera_hfov: 1.1519            # rad (66 deg), Pinky sim camera. TODO(demo): measure
+    camera_offset_x: 0.035         # m, front_camera_link ahead of base_link (URDF)
+    camera_flip: false             # true if the image is upside down
+    aruco_dictionary: DICT_4X4_50  # our printed markers (make_markers)
+    marker_size: 0.10              # m, black square side. TODO(demo): measure the print
+    distance_source: auto          # auto | lidar | marker_size
     lidar_window_deg: 3.0
-    lidar_yaw_offset: 0.0
+    lidar_yaw_from_tf: true        # rplidar_link is turned 180 deg in the URDF
+    lidar_yaw_offset: 3.14159      # used only if TF has no LiDAR frame
     max_detect_distance: 2.5
     process_rate: 10.0
     debug_image: true
