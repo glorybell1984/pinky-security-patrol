@@ -38,6 +38,10 @@ Commands flow down (UI -> task manager -> traffic manager -> robot). Status flow
 | `/traffic/pause`, `/traffic/resume`, `/traffic/emergency_stop` | `std_srvs/Trigger` | UI -> traffic manager |
 | `/fleet/start_patrol`, `/fleet/stop_patrol`, `/fleet/stop_follow` | `std_srvs/Trigger` | UI -> task manager |
 | `/fleet/acknowledge_object` | `AcknowledgeObject` | UI -> task manager |
+| `/battery/voltage`, `/battery/percent` | `std_msgs/Float32` | Pinky `battery_publisher` -> task manager |
+| `/fleet/battery` | `std_msgs/String` (JSON) | task manager -> UI (level, voltage, percent) |
+| `/traffic/go_to_charger`, `/traffic/stop` | `std_srvs/Trigger` | task manager -> traffic manager |
+| `/traffic/charger` | `PoseStamped` | traffic manager -> UI, RViz |
 | `/fleet/lamp` | `std_msgs/String` OFF/ON/BLINK | traffic manager -> dashboard |
 | `/set_lamp` | `pinky_interfaces/SetLamp` | traffic manager -> `pinky_lamp_control` (robot) |
 | `/set_emotion` | `pinky_interfaces/Emotion` | traffic manager -> `pinky_emotion` LCD (robot) |
@@ -60,7 +64,7 @@ All thresholds are in `security_bringup/config/rules.yaml`.
 
 | Task state (task manager) | Motion state (traffic manager) |
 |---|---|
-| PATROLLING, HOLDING, FOLLOWING, STOPPED, PAUSED, EMERGENCY_STOP | MOVING, HOLDING, STOPPED, PAUSED, ESTOP, ERROR (no pose for 3 s) |
+| PATROLLING, HOLDING, FOLLOWING, RETURNING, CHARGING, STOPPED, PAUSED, EMERGENCY_STOP | MOVING, HOLDING, STOPPED, PAUSED, ESTOP, ERROR (no pose for 3 s) |
 
 ## Key design decisions
 
@@ -72,4 +76,6 @@ All thresholds are in `security_bringup/config/rules.yaml`.
 | TF at the image time, with fallback to latest | Robot and laptop clocks may differ |
 | Pass number only grows at the loop's wrap | A hold or follow must not count as a new pass |
 | `MultiThreadedExecutor` + `ReentrantCallbackGroup` everywhere | Action servers block while waiting for Nav2 futures |
+| No automatic restart after charging | Pinky charges through a cable a person plugs in; driving off would pull it out (`auto_resume_after_charge` for a dock) |
+| Battery: median filter + repeated readings | Voltage sags under motor load; one low sample must not send the robot home |
 | Registry is pure Python with unit tests | The decision logic can be tested without a robot |

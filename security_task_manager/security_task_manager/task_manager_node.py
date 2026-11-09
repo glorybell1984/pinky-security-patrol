@@ -4,19 +4,28 @@ Subscribes
     /perception/detections   ObjectDetectionArray   (one message per camera frame)
     /traffic/robot_status    RobotState             (pose, motion, lamp, patrol pass)
     /traffic/events          std_msgs/String (JSON) (forwarded to /fleet/events)
+    /battery/voltage, /battery/percent   std_msgs/Float32 (Pinky's battery_publisher)
 Publishes
     /fleet/objects           TrackedObjectArray     2 Hz
     /fleet/robot_state       RobotState             2 Hz (adds task_state)
     /fleet/events            std_msgs/String (JSON) every event
     /fleet/event_history     std_msgs/String (JSON list) last 500 events, every 3 s,
                              so a dashboard opened later still shows the history
+    /fleet/battery           std_msgs/String (JSON) 1 Hz: level, voltage, percent
     /tf_static               suspicious_object_<id> frames under map
 Services
     /fleet/acknowledge_object  AcknowledgeObject
     /fleet/start_patrol, /fleet/stop_patrol, /fleet/stop_follow   std_srvs/Trigger
 Uses
     /traffic/patrol (Patrol action), /traffic/follow_target (FollowTarget action),
-    /traffic/hold_and_signal (HoldAndSignal service)
+    /traffic/hold_and_signal (HoldAndSignal service),
+    /traffic/go_to_charger, /traffic/stop (std_srvs/Trigger)
+
+Battery
+    LOW       finish the current follow, then drive to the charger (no new holds)
+    CRITICAL  stop following too and drive to the charger now
+    At the charger the robot waits (CHARGING) until the operator presses
+    Start patrol, because Pinky charges through a cable that a person plugs in.
 """
 import json
 import threading
@@ -31,7 +40,7 @@ from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 from std_srvs.srv import Trigger
 from tf2_ros import StaticTransformBroadcaster
 
@@ -40,6 +49,7 @@ from security_interfaces.msg import (ObjectDetectionArray, RobotState,
                                      TrackedObject, TrackedObjectArray)
 from security_interfaces.srv import AcknowledgeObject, HoldAndSignal
 
+from .battery_monitor import CRITICAL, LOW, BatteryConfig, BatteryMonitor
 from .event_logger import EventLogger
 from .object_registry import ObjectRegistry, RegistryConfig
 from .warning_rules import FOLLOW, HOLD, action_for
@@ -49,6 +59,8 @@ PATROLLING = 'PATROLLING'
 HOLDING = 'HOLDING'
 FOLLOWING = 'FOLLOWING'
 STOPPED = 'STOPPED'
+RETURNING = 'RETURNING'      # low battery, driving to the charger
+CHARGING = 'CHARGING'        # at the charger, waiting for the operator
 
 
 def to_time_msg(t):
@@ -80,6 +92,15 @@ class TaskManager(Node):
         p('hold_duration', 5.0)
         p('auto_start_patrol', True)
         p('log_dir', '~/patrol_logs')
+        p('battery_enabled', True)
+        p('battery_voltage_topic', '/battery/voltage')
+        p('battery_percent_topic', '/battery/percent')
+        p('battery_low_voltage', 7.0)        # go and charge after the current task
+        p('battery_critical_voltage', 6.8)   # go and charge now (Pinky warns here)
+        p('battery_charged_voltage', 8.0)    # ready to patrol again
+        p('battery_window', 3)               # median of the last N samples (5 s each)
+        p('battery_confirm', 2)              # readings in a row before a level change
+        p('auto_resume_after_charge', False) # True only with a dock (no cable)
         g = lambda name: self.get_parameter(name).value  # noqa: E731
 
         self.registry = ObjectRegistry(RegistryConfig(
@@ -99,6 +120,15 @@ class TaskManager(Node):
         self.lost_timeout = g('lost_timeout')
         self.hold_duration = g('hold_duration')
 
+        self.battery = BatteryMonitor(BatteryConfig(
+            low_voltage=g('battery_low_voltage'),
+            critical_voltage=g('battery_critical_voltage'),
+            charged_voltage=g('battery_charged_voltage'),
+            window=g('battery_window'),
+            confirm=g('battery_confirm'),
+        ))
+        self.auto_resume = g('auto_resume_after_charge')
+
         self.logger = EventLogger(g('log_dir'))
         self.get_logger().info(f'Event log: {self.logger.path}')
 
@@ -111,6 +141,8 @@ class TaskManager(Node):
         self.follow_marker = -1
         self.hold_timer = None
         self.restart_timer = None
+        self.charge_after_follow = False
+        self.charge_requested_at = 0.0
 
         # ROS interfaces
         self.create_subscription(ObjectDetectionArray, '/perception/detections',
@@ -119,6 +151,12 @@ class TaskManager(Node):
                                  self.on_robot_status, 10, callback_group=self.cb)
         self.create_subscription(String, '/traffic/events',
                                  self.on_traffic_event, 50, callback_group=self.cb)
+        if g('battery_enabled'):
+            self.create_subscription(Float32, g('battery_voltage_topic'),
+                                     self.on_battery_voltage, 10, callback_group=self.cb)
+            self.create_subscription(Float32, g('battery_percent_topic'),
+                                     self.on_battery_percent, 10, callback_group=self.cb)
+        self.battery_pub = self.create_publisher(String, '/fleet/battery', 10)
         self.objects_pub = self.create_publisher(TrackedObjectArray, '/fleet/objects', 10)
         self.state_pub = self.create_publisher(RobotState, '/fleet/robot_state', 10)
         self.events_pub = self.create_publisher(String, '/fleet/events', 50)
@@ -141,9 +179,14 @@ class TaskManager(Node):
                                           callback_group=self.cb)
         self.hold_client = self.create_client(HoldAndSignal, '/traffic/hold_and_signal',
                                               callback_group=self.cb)
+        self.charger_client = self.create_client(Trigger, '/traffic/go_to_charger',
+                                                 callback_group=self.cb)
+        self.traffic_stop_client = self.create_client(Trigger, '/traffic/stop',
+                                                      callback_group=self.cb)
 
         self.create_timer(0.5, self.publish_status, callback_group=self.cb)
         self.create_timer(3.0, self.publish_history, callback_group=self.cb)
+        self.create_timer(1.0, self.publish_battery, callback_group=self.cb)
         if g('auto_start_patrol'):
             self.startup_timer = self.create_timer(2.0, self.try_auto_start,
                                                    callback_group=self.cb)
@@ -182,6 +225,11 @@ class TaskManager(Node):
         except ValueError:
             return
         self.emit(ev, source='traffic_manager')
+        with self.lock:
+            if ev.get('event') == 'charger_reached' and self.mode == RETURNING:
+                self.mode = CHARGING
+            elif ev.get('event') == 'charger_failed' and self.mode == RETURNING:
+                self.mode = STOPPED
 
     # ================================================================ inputs
     def on_robot_status(self, msg):
@@ -211,7 +259,89 @@ class TaskManager(Node):
         if action == HOLD and self.mode == PATROLLING:
             self.start_hold(ev['marker_id'])
         elif action == FOLLOW and self.mode != FOLLOWING:
+            if self.mode == CHARGING or self.battery.level == CRITICAL:
+                why = 'at the charger' if self.mode == CHARGING else 'battery critical'
+                self.emit({'event': 'follow_skipped', 'marker_id': ev['marker_id'],
+                           'message': f"Not following #{ev['marker_id']}: {why}"})
+                return
+            if self.mode == RETURNING:
+                self.charge_after_follow = True   # follow first, then back to the charger
             self.start_follow(ev['marker_id'])
+
+    # ================================================================ battery
+    def on_battery_percent(self, msg):
+        self.battery.percent = float(msg.data)
+
+    def on_battery_voltage(self, msg):
+        with self.lock:
+            events = self.battery.update(float(msg.data))
+        for name in events:
+            self.on_battery_event(name)
+
+    def on_battery_event(self, name):
+        v = self.battery.voltage
+        if name == 'low':
+            self.emit({'event': 'battery_low',
+                       'message': f'Battery low ({v:.2f} V)'})
+            if self.mode in (PATROLLING, HOLDING):
+                self.go_charge('battery low')
+            elif self.mode == FOLLOWING:
+                self.charge_after_follow = True
+                self.emit({'event': 'battery_low', 'message':
+                           'Battery low: will go to the charger after this follow'})
+        elif name == 'critical':
+            self.emit({'event': 'battery_critical',
+                       'message': f'Battery critical ({v:.2f} V)'})
+            if self.mode == FOLLOWING and self.follow_handle is not None:
+                self.charge_after_follow = True
+                self.follow_handle.cancel_goal_async()
+            elif self.mode in (PATROLLING, HOLDING):
+                self.go_charge('battery critical')
+        elif name == 'recovered':
+            self.emit({'event': 'battery_recovered',
+                       'message': f'Battery voltage up again ({v:.2f} V)'})
+        elif name == 'charged':
+            if self.mode == CHARGING and self.auto_resume:
+                self.emit({'event': 'battery_charged',
+                           'message': f'Battery charged ({v:.2f} V): resuming patrol'})
+                self.start_patrol()
+            else:
+                self.emit({'event': 'battery_charged',
+                           'message': f'Battery charged ({v:.2f} V). Unplug the cable, '
+                                      'then press Start patrol.'})
+
+    def go_charge(self, reason):
+        with self.lock:
+            if self.mode in (RETURNING, CHARGING):
+                return
+            self.mode = RETURNING
+            self.charge_after_follow = False
+            for t in (self.hold_timer, self.restart_timer):
+                if t is not None:
+                    t.cancel()
+            self.hold_timer = self.restart_timer = None
+            self.stop_patrol()
+        self.emit({'event': 'go_charge', 'message': f'Going to the charger ({reason})'})
+        self.request_charger()
+
+    def request_charger(self):
+        self.charge_requested_at = self.get_clock().now().nanoseconds * 1e-9
+        if self.charger_client.service_is_ready():
+            self.charger_client.call_async(Trigger.Request())
+        else:
+            self.get_logger().warn('/traffic/go_to_charger not available, will retry')
+
+    def check_charger_request(self):
+        """RETURNING but the traffic manager is not driving there (after an e-stop,
+        or the request got lost): ask again every few seconds."""
+        if self.mode != RETURNING:
+            return
+        traffic = self.robot_status.task_state
+        if traffic in ('RETURNING', 'CHARGING') or self.robot_status.motion_state in (
+                'PAUSED', 'ESTOP'):
+            return
+        if self.get_clock().now().nanoseconds * 1e-9 - self.charge_requested_at > 5.0:
+            self.request_charger()
 
     # ================================================================ patrol
     def try_auto_start(self):
@@ -339,7 +469,7 @@ class TaskManager(Node):
         marker = self.follow_marker
         reason = res.result.reason if res.result else 'cancelled'
         if res.status == GoalStatus.STATUS_CANCELED:
-            reason = 'stopped by operator'
+            reason = 'battery critical' if self.battery.level == CRITICAL else 'stopped by operator'
         with self.lock:
             lp = res.result.last_position if res.result else None
             obj = self.registry.get(marker)
@@ -355,9 +485,15 @@ class TaskManager(Node):
     def resume_after_follow(self):
         with self.lock:
             self.follow_marker = -1
-            if self.mode == FOLLOWING:
+            if self.mode != FOLLOWING:
+                return
+            if self.charge_after_follow or self.battery.level in (LOW, CRITICAL):
+                self.mode = PATROLLING      # so go_charge() runs
+            else:
                 self.mode = PATROLLING
                 self.schedule_restart(1.0)
+                return
+        self.go_charge(f'battery {self.battery.level.lower()}, after follow')
 
     # ================================================================ services
     def on_acknowledge(self, req, res):
@@ -373,6 +509,15 @@ class TaskManager(Node):
         return res
 
     def on_start_patrol(self, req, res):
+        if self.battery.level == CRITICAL and not self.battery.charged:
+            res.success = False
+            res.message = f'Battery critical ({self.battery.voltage:.2f} V): charge first'
+            self.emit({'event': 'patrol_refused', 'message': res.message})
+            return res
+        if self.mode in (RETURNING, CHARGING):
+            self.emit({'event': 'charge_ended', 'message': 'Leaving the charger: patrol resumed'
+                       if self.battery.level not in (LOW, CRITICAL)
+                       else 'Patrol resumed by operator with a LOW battery'})
         if self.follow_handle is not None:
             self.follow_handle.cancel_goal_async()
         ok = self.start_patrol()
@@ -382,6 +527,8 @@ class TaskManager(Node):
 
     def on_stop_patrol(self, req, res):
         with self.lock:
+            if self.mode in (RETURNING, CHARGING) and self.traffic_stop_client.service_is_ready():
+                self.traffic_stop_client.call_async(Trigger.Request())
             self.mode = STOPPED
             if self.hold_timer is not None:
                 self.hold_timer.cancel()
@@ -435,6 +582,13 @@ class TaskManager(Node):
                 m.acknowledged = o.acknowledged
                 arr.objects.append(m)
         self.objects_pub.publish(arr)
+
+    def publish_battery(self):
+        self.check_charger_request()
+        data = self.battery.snapshot()
+        data['mode'] = self.mode
+        data['auto_resume'] = self.auto_resume
+        self.battery_pub.publish(String(data=json.dumps(data)))
 
     def publish_history(self):
         self.history_pub.publish(String(data=json.dumps(list(self.recent_events))))

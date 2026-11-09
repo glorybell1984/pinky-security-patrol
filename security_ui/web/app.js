@@ -23,6 +23,8 @@
     waypoints: [],
     map: null,              // {canvas, info}
     fake: null,             // fake_pinky status
+    battery: null,          // /fleet/battery JSON
+    charger: null,          // {x, y} from /traffic/charger
     tab: 'overview',
     objFilter: 'all',
     logFilter: 'all',
@@ -124,6 +126,13 @@
       state.waypoints = m.poses.map((p) => ({ x: p.position.x, y: p.position.y }));
       scheduleRender();
     }, 2000);
+    topic('/fleet/battery', 'std_msgs/msg/String', (m) => {
+      try { state.battery = JSON.parse(m.data); } catch (e) { return; }
+      scheduleRender();
+    }, 1000);
+    topic('/traffic/charger', 'geometry_msgs/msg/PoseStamped', (m) => {
+      state.charger = { x: m.pose.position.x, y: m.pose.position.y };
+    }, 5000);
     topic('/map', 'nav_msgs/msg/OccupancyGrid', (m) => { buildMapImage(m); scheduleRender(); }, 5000);
     topic('/perception/debug_image/compressed', 'sensor_msgs/msg/CompressedImage', (m) => {
       const img = $('camera-img');
@@ -156,9 +165,10 @@
 
   // ------------------------------------------------------------------ events
   const KIND = {
-    warning: new Set(['seen_again', 'moving', 'lost_track', 'hold', 'follow_start', 'emergency_stop', 'robot_lost', 'reacquired']),
+    warning: new Set(['seen_again', 'moving', 'lost_track', 'hold', 'follow_start', 'emergency_stop', 'robot_lost', 'reacquired',
+      'battery_low', 'battery_critical', 'go_charge', 'charger_failed', 'patrol_refused']),
     detection: new Set(['detected', 'relocated', 'removed', 'reappeared', 'resighted', 'moving_update', 'reacquired']),
-    operator: new Set(['acknowledged', 'cleared', 'paused', 'resumed', 'patrol_stopped', 'emergency_stop']),
+    operator: new Set(['acknowledged', 'cleared', 'paused', 'resumed', 'patrol_stopped', 'emergency_stop', 'charge_ended']),
   };
   function eventKind(e) {
     if (KIND.operator.has(e.event)) return 'operator';
@@ -312,6 +322,26 @@
       ctx.fillText(`#${o.marker_id} · ${o.state === 'REMOVED' ? 'removed' : 'L' + o.warning_level}`, x + 12, y + 4);
     }
 
+    // charger
+    if (state.charger) {
+      const cx = v.sx(state.charger.x), cy = v.sy(state.charger.y);
+      ctx.fillStyle = '#DCFCE7';
+      ctx.strokeStyle = '#16A34A';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(cx - 11, cy - 11, 22, 22, 4) : ctx.rect(cx - 11, cy - 11, 22, 22);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();                      // lightning bolt
+      ctx.moveTo(cx + 2, cy - 7); ctx.lineTo(cx - 4, cy + 1); ctx.lineTo(cx, cy + 1);
+      ctx.lineTo(cx - 2, cy + 7); ctx.lineTo(cx + 4, cy - 1); ctx.lineTo(cx, cy - 1); ctx.closePath();
+      ctx.fillStyle = '#15803D';
+      ctx.fill();
+      ctx.fillStyle = '#15803D';
+      ctx.font = '600 11px Inter, sans-serif';
+      ctx.fillText('charger', cx + 14, cy + 16);
+    }
+
     // robot
     if (state.robot) {
       const r = state.robot;
@@ -327,14 +357,14 @@
         ctx.stroke();
         ctx.setLineDash([]);
       }
-      if (r.lamp === 'BLINK' || r.lamp === 'ON') {
-        const on = r.lamp === 'ON' || Math.floor(Date.now() / 400) % 2 === 0;
-        if (on) {
-          ctx.beginPath();
-          ctx.arc(x, y, 22, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
-          ctx.fill();
-        }
+      const GLOW = { BLINK: ['rgba(220, 38, 38, 0.35)', 400], ON: ['rgba(219, 39, 119, 0.35)', 150],
+        LOW: ['rgba(245, 158, 11, 0.4)', 800], CHARGE: ['rgba(22, 163, 74, 0.3)', 0] };
+      const glow = GLOW[r.lamp];
+      if (glow && (!glow[1] || Math.floor(Date.now() / glow[1]) % 2 === 0)) {
+        ctx.beginPath();
+        ctx.arc(x, y, 22, 0, Math.PI * 2);
+        ctx.fillStyle = glow[0];
+        ctx.fill();
       }
       ctx.save();
       ctx.translate(x, y);
@@ -426,14 +456,16 @@
       $('s-task-sub').textContent = state.connected ? 'No /fleet/robot_state (is the task manager running?)' : 'Not connected';
     } else {
       const warn = ['HOLDING', 'FOLLOWING', 'EMERGENCY_STOP', 'ERROR'].includes(r.task_state);
+      const COLORS = { FOLLOWING: '#6D28D9', RETURNING: '#B45309', CHARGING: '#15803D' };
       $('s-task').textContent = r.task_state;
-      $('s-task').style.color = r.task_state === 'FOLLOWING' ? '#6D28D9' : warn ? '#B91C1C' : '';
+      $('s-task').style.color = COLORS[r.task_state] || (warn ? '#B91C1C' : '');
       $('s-task-sub').textContent = `motion ${r.motion_state} · lamp ${r.lamp}`;
     }
     $('s-pass').textContent = r ? String(r.patrol_pass || '—') : '—';
     $('s-pass-sub').textContent = r && state.waypoints.length
       ? `heading to WP${r.waypoint_index + 1} of ${state.waypoints.length}` : '';
     $('s-pose').textContent = r ? `(${fmt(r.pose.x)}, ${fmt(r.pose.y)})` : '—';
+    renderBattery();
 
     $('robot-name').textContent = r ? r.robot_id : 'Robot';
     $('r-task').textContent = r ? r.task_state : '—';
@@ -451,6 +483,37 @@
     $('estop').classList.toggle('active', !!estop);
   }
 
+  function renderBattery() {
+    const b = state.battery;
+    const card = $('battery-card');
+    card.classList.remove('low', 'critical', 'charging');
+    if (!b || b.voltage == null) {
+      $('s-battery').textContent = '—';
+      $('s-battery-sub').textContent = b ? 'Waiting for /battery/voltage' : 'No /fleet/battery yet';
+      $('battery-fill').style.width = '0';
+      return;
+    }
+    const pct = b.percent != null ? b.percent
+      : Math.max(0, Math.min(100, (b.voltage - 6.6) / (8.4 - 6.6) * 100));
+    $('s-battery').textContent = `${b.voltage.toFixed(2)} V · ${Math.round(pct)}%`;
+    $('battery-fill').style.width = `${pct}%`;
+    let sub = 'OK';
+    if (b.mode === 'CHARGING') {
+      card.classList.add('charging');
+      sub = b.charged ? 'Charged · unplug, then Start patrol' : 'At the charger · plug in the cable';
+    } else if (b.mode === 'RETURNING') {
+      card.classList.add(b.level === 'CRITICAL' ? 'critical' : 'low');
+      sub = 'Low · driving to the charger';
+    } else if (b.level === 'CRITICAL') {
+      card.classList.add('critical');
+      sub = `Critical (≤ ${b.critical_voltage} V)`;
+    } else if (b.level === 'LOW') {
+      card.classList.add('low');
+      sub = b.mode === 'FOLLOWING' ? 'Low · charger after this follow' : `Low (≤ ${b.low_voltage} V)`;
+    }
+    $('s-battery-sub').textContent = sub;
+  }
+
   function renderSim() {
     const card = $('sim-card');
     if (!state.fake) { card.hidden = true; return; }
@@ -464,6 +527,17 @@
         el('button', { type: 'button', class: 'btn btn-sm', text: 'Remove', onclick: () => sendFake(`remove ${o.id}`) }),
       ]),
     ])));
+    const fb = state.fake.battery;
+    if (!fb) { $('sim-battery').replaceChildren(); return; }
+    $('sim-battery').replaceChildren(el('div', { class: 'sim-row' }, [
+      el('span', { class: 'label', text: `Battery ${fb.voltage.toFixed(2)} V${fb.plugged ? ' (plugged)' : ''}` }),
+      el('span', { class: 'row-gap wrap' }, [
+        el('button', { type: 'button', class: 'btn btn-sm', text: 'Low', onclick: () => sendFake('battery 6.95') }),
+        el('button', { type: 'button', class: 'btn btn-sm', text: 'Critical', onclick: () => sendFake('battery 6.75') }),
+        el('button', { type: 'button', class: 'btn btn-sm', text: fb.plugged ? 'Unplug' : 'Plug in', onclick: () => sendFake(fb.plugged ? 'unplug' : 'plug') }),
+        el('button', { type: 'button', class: 'btn btn-sm', text: 'Full', onclick: () => sendFake('battery 8.3') }),
+      ]),
+    ]));
   }
 
   // ------------------------------------------------------------------ registry

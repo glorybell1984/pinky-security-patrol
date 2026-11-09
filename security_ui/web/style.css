@@ -109,6 +109,13 @@ button { font-family: inherit; }
 .sim-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .sim-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 8px; border-radius: 8px; background: #F7F8FA; }
 .sim-row .label { font-weight: 600; }
+.battery-bar { height: 6px; margin-top: 8px; border-radius: 999px; background: #E3E6EB; overflow: hidden; }
+.battery-bar span { display: block; height: 100%; width: 0; background: #16A34A; transition: width 0.4s; }
+#battery-card.low .stat-value { color: #B45309; }
+#battery-card.low .battery-bar span { background: #F59E0B; }
+#battery-card.critical .stat-value { color: #B91C1C; }
+#battery-card.critical .battery-bar span { background: #DC2626; }
+#battery-card.charging .stat-value { color: #15803D; }
 
 /* ---------- tables */
 .table-wrap { overflow-x: auto; }

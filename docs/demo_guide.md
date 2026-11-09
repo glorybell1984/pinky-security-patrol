@@ -43,12 +43,16 @@ A lap takes about one minute.
 | any time | **Remove** on #5 | Next time #5's place is in view: **REMOVED** |
 | any time | **Acknowledge** on #3 | Alert clears, no more holds for #3 |
 | any time | **EMERGENCY STOP**, then **CLEAR STOP** | All motion stops, then patrol resumes |
+| any time | Simulation panel: battery **Low** | RETURNING: amber lamp, robot drives to the charger, then CHARGING (green) |
+| at the charger | **Plug in**, wait for "Battery charged", **Unplug**, then **Start patrol** | Patrol resumes where it left off |
+| during a follow | battery **Low** / **Critical** | Low: finishes the follow first. Critical: stops following and goes to charge |
 
 Commands also work from a terminal:
 
 ```bash
 ros2 topic pub --once /fake_pinky/command std_msgs/msg/String "{data: 'pickup 7'}"
-# other commands: hide 7, show 7, remove 5, place 9 2.0 2.0
+# other commands: hide 7, show 7, remove 5, place 9 2.0 2.0,
+#                 battery 6.95, battery 6.75, plug, unplug
 ```
 
 ---
@@ -65,11 +69,13 @@ Checked against [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro
 | LiDAR | `/scan`, frame `rplidar_link`, **turned 180°** in the URDF | perception reads the yaw from TF (`lidar_yaw_from_tf`) |
 | Camera | **No camera node in `bringup_robot`**. Only `pinkylib.Camera` / picamera2 on the robot | our `camera_publisher.py` runs on the robot |
 | Camera pose | `front_camera_link` 0.035 m ahead of `base_link`, tilted 8° down; sim FOV 1.1519 rad | `camera_offset_x: 0.035`, `camera_hfov: 1.1519` |
+| Battery | `battery_publisher` (in `bringup_robot`): `/battery/voltage`, `/battery/percent` (Float32, every 5 s). Pinky warns at 6.8 V | task manager: LOW 7.0 V, CRITICAL 6.8 V |
 | Lamp | `pinky_lamp_control` service `/set_lamp` (`SetLamp`: color, mode 0 off / 1 on / 2 blink / 3 dimming, time ms). **Not started by bringup** | traffic manager calls `/set_lamp` |
 | LCD face | `pinky_emotion` service `/set_emotion` (`hello basic angry bored fun happy interest sad`) | `angry` on level 2, `interest` on level 3, `basic` on patrol |
 | Nav2 | `navigate_to_pose`, 0.2 m/s, goal tolerance 0.25 m / 0.25 rad, `cmd_vel` (Twist) | same names, no change |
 
-Lamp styles: patrol = blue breathing, level 2 = red blink (300 ms), level 3 = fast magenta blink.
+Lamp styles: patrol = blue breathing, level 2 = red blink (300 ms), level 3 = fast magenta blink,
+going to charge = amber blink, at the charger = green breathing.
 Change them in `LAMP_STYLES` in `security_traffic_manager/robot_adapter.py`.
 
 ### Laptop setup (once)
@@ -144,6 +150,7 @@ The simulator world has no ArUco markers, so this tests patrol, pause, e-stop an
 | 3 | **Test detection** | Dashboard camera panel shows boxes + distance | Distance within ~10 cm at 1 m. Find the max detection distance |
 | 4 | **Camera FOV** | `camera_hfov` in `perception.yaml` | Marker at 1 m, 30 cm to the side: map position within 5 cm. If off, adjust `camera_hfov` |
 | 5 | **Map** | `ros2 launch pinky_navigation map_building.launch.xml` -> teleop -> `map_saver_cli -f <name>` | Map loads in Nav2, AMCL localizes |
+| 6b | **Charger spot** | `config/patrol.yaml` `charger_pose` | A free spot next to a power socket, reachable from the loop. Check battery readings: `ros2 topic echo /battery/voltage` |
 | 6 | **Patrol waypoints** | `config/patrol.yaml` `waypoints` | RViz *Publish Point* -> `ros2 topic echo /clicked_point --once`. Pick points where markers will be in view |
 | 7 | **Lamp and LCD** | `pinky_lamp_control`, `pinky_emotion` running on the robot | Patrol: blue breathing. Level 2: red blink + angry face |
 | 8 | **Tune thresholds** with real noise | `config/rules.yaml` | No false MOVING while patrolling. Raise `moving_threshold` if needed |

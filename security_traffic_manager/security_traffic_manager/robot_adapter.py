@@ -27,9 +27,12 @@ LAMP_STYLES = {
     'OFF':   {'rgb': (0.0, 0.3, 1.0), 'mode': 3, 'time': 2000},  # patrolling: slow blue breathing
     'BLINK': {'rgb': (1.0, 0.0, 0.0), 'mode': 2, 'time': 300},   # level 2 hold: red blink
     'ON':    {'rgb': (1.0, 0.0, 0.6), 'mode': 2, 'time': 120},   # level 3 follow: fast magenta
+    'LOW':   {'rgb': (1.0, 0.6, 0.0), 'mode': 2, 'time': 800},   # low battery, going to charge
+    'CHARGE': {'rgb': (0.0, 1.0, 0.2), 'mode': 3, 'time': 3000},  # at the charger: green
 }
 # Our lamp mode -> pinky_emotion face on the LCD.
-EMOTIONS = {'OFF': 'basic', 'BLINK': 'angry', 'ON': 'interest'}
+EMOTIONS = {'OFF': 'basic', 'BLINK': 'angry', 'ON': 'interest', 'LOW': 'sad',
+            'CHARGE': 'bored'}
 
 SUCCEEDED = 'succeeded'
 FAILED = 'failed'
@@ -177,7 +180,7 @@ class RobotAdapter:
 
     # ------------------------------------------------------------------ lamp
     def set_lamp(self, mode):
-        """mode: OFF, ON or BLINK. Called often (every status tick).
+        """mode: OFF, ON, BLINK, LOW or CHARGE. Called often (every status tick).
 
         Always publishes the mode on lamp_topic for the dashboard. When Pinky's
         pinky_lamp_control (/set_lamp) and pinky_emotion (/set_emotion) servers

@@ -82,8 +82,23 @@ The full demo steps and the remaining real-robot checklist are in
 | Patrol loop, hold + turn to object, follow, lost track, pause / e-stop | Done, tested on fake Pinky |
 | ArUco perception (camera bearing + LiDAR / marker-size distance) | Done, tested with a synthetic image |
 | Dashboard (map, registry, event log, camera, controls, simulation) | Done |
+| Battery: low / critical -> drive to the charger, wait, operator restarts | Done, 7 unit tests, tested on fake Pinky |
 | Pinky Pro integration: camera publisher, `/set_lamp` lamp, `/set_emotion` LCD, LiDAR frame, URDF offsets | Done, checked against [pinky_pro](https://github.com/pinklab-art/pinky_pro) |
-| Camera orientation, printed markers, map, waypoints, threshold tuning | **To do on the robot** |
+| Camera orientation, printed markers, map, waypoints, charger spot, threshold tuning | **To do on the robot** |
+
+## Battery
+
+Pinky's `battery_publisher` sends `/battery/voltage` every 5 s (2-cell, about 8.4 V full).
+
+| Battery | Robot action |
+|---|---|
+| LOW (7.0 V) | No new holds. A running follow is finished first, then the robot drives to `charger_pose` |
+| CRITICAL (6.8 V) | Stops a follow at once and drives to the charger. Start patrol is refused |
+| At the charger | Waits (CHARGING, green lamp) until someone plugs in the cable, the battery reaches 8.0 V, and the operator unplugs it and presses **Start patrol** |
+
+Readings are median-filtered and must repeat before the level changes, so voltage
+sag under motor load does not send the robot home. Thresholds are in `config/rules.yaml`,
+the charger spot in `config/patrol.yaml` (`charger_pose`).
 
 ## Warning levels
 

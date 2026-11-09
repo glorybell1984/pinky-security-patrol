@@ -8,6 +8,7 @@ Replaces Nav2, localization, the map server and perception:
     /perception/detections  ObjectDetectionArray for marked objects in the camera's view
     /fake_pinky/markers     MarkerArray (ground truth, for RViz)
     /fake_pinky/status      std_msgs/String JSON (objects and robot, for the dashboard)
+    /battery/voltage, /battery/percent   Float32, like Pinky's battery_publisher
     /set_lamp, /set_emotion fake pinky_lamp_control / pinky_emotion servers
                             (only when the pinky_pro workspace is sourced)
 
@@ -20,6 +21,8 @@ Commands
     show <id>            marker visible again
     place <id> <x> <y>   put an object at (x, y), creating it if needed
     remove <id>          take the object away
+    battery <volts>      set the battery voltage (e.g. battery 6.95 = low)
+    plug / unplug        connect / disconnect the charging cable
 """
 import json
 import math
@@ -36,7 +39,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -89,6 +92,11 @@ class FakePinky(Node):
         p('detect_noise', 0.02)
         p('detect_rate', 10.0)
         p('lamp_topic', '/fleet/lamp')
+        p('battery_voltage', 7.6)                    # V at start (8.4 full, 7.0 low)
+        p('battery_drain_moving', 0.0015)            # V/s while driving
+        p('battery_drain_idle', 0.0002)              # V/s standing still
+        p('battery_charge_rate', 0.02)               # V/s with the cable plugged in
+        p('battery_period', 2.0)                     # s between readings (Pinky: 5 s)
         p('scenario', [''])                          # ["<seconds> <command>", ...]
         g = lambda name: self.get_parameter(name).value  # noqa: E731
 
@@ -146,6 +154,16 @@ class FakePinky(Node):
         self.det_pub = self.create_publisher(ObjectDetectionArray, '/perception/detections', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/fake_pinky/markers', 10)
         self.status_pub = self.create_publisher(String, '/fake_pinky/status', 10)
+        self.volt_pub = self.create_publisher(Float32, '/battery/voltage', 10)
+        self.pct_pub = self.create_publisher(Float32, '/battery/percent', 10)
+        self.battery = float(g('battery_voltage'))
+        self.drain_moving = g('battery_drain_moving')
+        self.drain_idle = g('battery_drain_idle')
+        self.charge_rate = g('battery_charge_rate')
+        self.plugged = False
+        self.moving = False
+        self.last_xy = (self.x, self.y)
+        self.create_timer(g('battery_period'), self.publish_battery, callback_group=self.cb)
         self.create_subscription(Twist, f'{ns}/cmd_vel', self.on_cmd_vel, 10)
         self.create_subscription(String, '/fake_pinky/command', self.on_command, 10)
         self.create_subscription(String, g('lamp_topic'), self.on_lamp, 10)
@@ -201,7 +219,7 @@ class FakePinky(Node):
         cmd, args = parts[0].lower(), parts[1:]
         with self.lock:
             try:
-                mid = int(args[0]) if args else None
+                mid = int(args[0]) if args and cmd not in ('battery',) else None
                 obj = self.objects.get(mid)
                 if cmd == 'pickup' and obj:
                     obj.visible = True
@@ -219,6 +237,12 @@ class FakePinky(Node):
                         obj.x, obj.y, obj.visible, obj.path = x, y, True, []
                 elif cmd == 'remove' and obj:
                     del self.objects[mid]
+                elif cmd == 'battery' and args:
+                    self.battery = float(args[0])
+                elif cmd == 'plug':
+                    self.plugged = True
+                elif cmd == 'unplug':
+                    self.plugged = False
                 else:
                     self.get_logger().warn(f'Unknown or invalid command: {msg.data}')
                     return
@@ -279,12 +303,37 @@ class FakePinky(Node):
                     obj.visible = False
                     obj.hide_at = None
 
+        # battery
+        moved = math.hypot(self.x - self.last_xy[0], self.y - self.last_xy[1])
+        self.last_xy = (self.x, self.y)
+        self.moving = moved > 0.002 or self.navigating()
+        if self.plugged:
+            if moved > 0.01:
+                self.plugged = False
+                self.get_logger().error('Robot drove off with the charging cable plugged in! '
+                                        '(cable pulled out)')
+            self.battery = min(8.4, self.battery + self.charge_rate * dt)
+        else:
+            drain = self.drain_moving if self.moving else self.drain_idle
+            self.battery = max(6.0, self.battery - drain * dt)
+
         elapsed = now - self.start_time
         while self.scenario and self.scenario[0][0] <= elapsed:
             _, command = self.scenario.pop(0)
             self.on_command(String(data=command))
 
         self.publish_tf()
+
+    def publish_battery(self):
+        v = self.battery
+        if self.moving and not self.plugged:
+            v -= 0.08                              # voltage sag under motor load
+        if self.plugged:
+            v += 0.15                              # charger lifts the reading
+        v += random.uniform(-0.02, 0.02)
+        self.volt_pub.publish(Float32(data=float(v)))
+        pct = max(0.0, min(100.0, (self.battery - 6.6) / (8.4 - 6.6) * 100.0))
+        self.pct_pub.publish(Float32(data=float(pct)))
 
     def navigating(self):
         return getattr(self, '_navigating', False)
@@ -400,7 +449,9 @@ class FakePinky(Node):
         clear.action = Marker.DELETEALL
         arr.markers.append(clear)
         status = {'robot': {'x': round(self.x, 3), 'y': round(self.y, 3),
-                            'yaw': round(self.yaw, 3), 'lamp': self.lamp}, 'objects': []}
+                            'yaw': round(self.yaw, 3), 'lamp': self.lamp},
+                  'battery': {'voltage': round(self.battery, 2), 'plugged': self.plugged},
+                  'objects': []}
         with self.lock:
             for obj in self.objects.values():
                 m = Marker()
