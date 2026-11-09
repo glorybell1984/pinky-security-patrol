@@ -41,7 +41,36 @@ ros2 launch security_bringup fake_robot.launch.xml
 ros2 launch security_bringup patrol_system.launch.xml
 ```
 
-Then open `security_ui/web/index.html` in a browser (rosbridge on port 9090).
+### Open the dashboard
+
+The launch starts the ROS nodes and rosbridge only. It does **not** open a
+browser. Keep the launch running and, in a second terminal:
+
+```bash
+xdg-open ~/patrol_ws/src/pinky-security-patrol/security_ui/web/index.html
+```
+
+or paste `file://$HOME/patrol_ws/src/pinky-security-patrol/security_ui/web/index.html`
+into Chrome (replace `$HOME` with the output of `echo $HOME`).
+
+From another computer on the same network: `index.html?ws=ws://<laptop-ip>:9090`.
+
+| Check | Expected |
+|---|---|
+| Connection badge (top bar) | Green / connected |
+| Overview map | Robot moving along the waypoints |
+| Object registry | Objects appear within about a minute |
+
+If the badge stays disconnected:
+
+```bash
+ros2 node list | grep rosbridge     # rosbridge running?
+ss -ltn | grep 9090                 # port 9090 open?
+sudo apt install ros-jazzy-rosbridge-suite   # if missing, then relaunch
+```
+
+Chrome's "zygote" message in the terminal is harmless.
+
 The full demo steps and the remaining real-robot checklist are in
 [docs/demo_guide.md](docs/demo_guide.md).
 
