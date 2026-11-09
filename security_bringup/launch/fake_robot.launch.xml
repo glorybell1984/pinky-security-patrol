@@ -1,0 +1,27 @@
+<!--
+  FAKE robot: the whole system without Pinky, Nav2 or a camera.
+    ros2 launch security_bringup fake_robot.launch.xml
+  Then open security_ui/web/index.html and use the Simulation panel,
+  or publish a command (pickup 7, hide 7, remove 5, place 9 2.0 2.0)
+  on the /fake_pinky/command topic (std_msgs/msg/String).
+  Note: XML comments cannot contain two dashes in a row.
+-->
+<launch>
+  <arg name="rosbridge" default="true"/>
+  <let name="config_dir" value="$(find-pkg-share security_bringup)/config"/>
+
+  <node pkg="security_bringup" exec="fake_pinky" output="screen">
+    <param from="$(var config_dir)/fake.yaml"/>
+  </node>
+
+  <node pkg="security_traffic_manager" exec="traffic_manager" output="screen">
+    <param from="$(var config_dir)/patrol_fake.yaml"/>
+  </node>
+
+  <node pkg="security_task_manager" exec="task_manager" output="screen">
+    <param from="$(var config_dir)/rules.yaml"/>
+  </node>
+
+  <include if="$(var rosbridge)"
+           file="$(find-pkg-share rosbridge_server)/launch/rosbridge_websocket_launch.xml"/>
+</launch>

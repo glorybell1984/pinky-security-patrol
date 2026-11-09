@@ -1,6 +1,24 @@
+# Traffic manager settings for the REAL Pinky.
+# Waypoints are flat x, y, yaw_deg triples in the map frame. All values must be
+# written with a decimal point (0.0, not 0) or ROS rejects the list type.
+#
+# TODO(demo): replace with points from your own map:
+#   RViz -> Publish Point -> click -> ros2 topic echo /clicked_point --once
 traffic_manager:
   ros__parameters:
     robot_id: pinky1
-    namespace: ""                 # e.g. /pinky1 if the robot is namespaced
-    # Replace with /clicked_point values from your map: [x, y, yaw_deg, ...]
-    waypoints: [0.15, -3.61, 0.0, 0.94, -3.38, 0.0]
+    namespace: ""                  # e.g. "/pinky1" if Nav2 runs in a namespace
+    global_frame: map
+    base_frame: base_footprint
+    lamp_topic: /fleet/lamp
+    cmd_vel_topic: ""              # default: <namespace>/cmd_vel
+    waypoints: [0.15, -3.61, 0.0,
+                0.94, -3.38, 90.0,
+                0.94, -2.40, 180.0,
+                0.15, -2.40, -90.0]
+    nav_retry: 1
+    waypoint_pause: 1.0            # s, look around a moment at each waypoint
+    pose_timeout: 3.0
+    follow_update_period: 0.5
+    follow_min_distance: 0.5
+    follow_replan_distance: 0.2

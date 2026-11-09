@@ -3,19 +3,21 @@ import csv
 import os
 from datetime import datetime
 
-HEADER = ['time', 'marker_id', 'event', 'state', 'warning_level',
-          'x_map', 'y_map', 'robot_x', 'robot_y', 'patrol_pass']
+HEADER = ['time', 'source', 'marker_id', 'event', 'state', 'warning_level',
+          'x_map', 'y_map', 'robot_x', 'robot_y', 'patrol_pass', 'message']
 
 
 class EventLogger:
 
-    def __init__(self, path):
-        self.path = path
-        new_file = not os.path.exists(path)
-        self._file = open(path, 'a', newline='')
+    def __init__(self, log_dir):
+        log_dir = os.path.expanduser(log_dir)
+        os.makedirs(log_dir, exist_ok=True)
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.path = os.path.join(log_dir, f'events_{stamp}.csv')
+        self._file = open(self.path, 'w', newline='')
         self._writer = csv.writer(self._file)
-        if new_file:
-            self._writer.writerow(HEADER)
+        self._writer.writerow(HEADER)
+        self._file.flush()
 
     def log(self, **row):
         row.setdefault('time', datetime.now().isoformat(timespec='seconds'))

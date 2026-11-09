@@ -7,6 +7,14 @@
   <maintainer email="glorybell1984@gmail.com">ljs</maintainer>
   <license>Apache-2.0</license>
 
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>security_interfaces</exec_depend>
   <exec_depend>security_task_manager</exec_depend>
   <exec_depend>security_perception</exec_depend>
   <exec_depend>security_traffic_manager</exec_depend>

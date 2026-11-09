@@ -1,15 +1,464 @@
-"""Task manager: turns detections into tracked objects and decisions."""
+"""Task manager: turns detections into tracked objects, warnings and robot tasks.
+
+Subscribes
+    /perception/detections   ObjectDetectionArray   (one message per camera frame)
+    /traffic/robot_status    RobotState             (pose, motion, lamp, patrol pass)
+    /traffic/events          std_msgs/String (JSON) (forwarded to /fleet/events)
+Publishes
+    /fleet/objects           TrackedObjectArray     2 Hz
+    /fleet/robot_state       RobotState             2 Hz (adds task_state)
+    /fleet/events            std_msgs/String (JSON) every event
+    /fleet/event_history     std_msgs/String (JSON list) last 500 events, every 3 s,
+                             so a dashboard opened later still shows the history
+    /tf_static               suspicious_object_<id> frames under map
+Services
+    /fleet/acknowledge_object  AcknowledgeObject
+    /fleet/start_patrol, /fleet/stop_patrol, /fleet/stop_follow   std_srvs/Trigger
+Uses
+    /traffic/patrol (Patrol action), /traffic/follow_target (FollowTarget action),
+    /traffic/hold_and_signal (HoldAndSignal service)
+"""
+import json
+import threading
+from collections import deque
+from datetime import datetime
+
 import rclpy
+from action_msgs.msg import GoalStatus
+from builtin_interfaces.msg import Time
+from geometry_msgs.msg import TransformStamped
+from rclpy.action import ActionClient
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from std_msgs.msg import String
+from std_srvs.srv import Trigger
+from tf2_ros import StaticTransformBroadcaster
+
+from security_interfaces.action import FollowTarget, Patrol
+from security_interfaces.msg import (ObjectDetectionArray, RobotState,
+                                     TrackedObject, TrackedObjectArray)
+from security_interfaces.srv import AcknowledgeObject, HoldAndSignal
+
+from .event_logger import EventLogger
+from .object_registry import ObjectRegistry, RegistryConfig
+from .warning_rules import FOLLOW, HOLD, action_for
+
+# Task modes (shown as RobotState.task_state)
+PATROLLING = 'PATROLLING'
+HOLDING = 'HOLDING'
+FOLLOWING = 'FOLLOWING'
+STOPPED = 'STOPPED'
+
+
+def to_time_msg(t):
+    sec = int(t)
+    return Time(sec=sec, nanosec=int((t - sec) * 1e9))
 
 
 class TaskManager(Node):
 
     def __init__(self):
         super().__init__('task_manager')
-        # TODO: publishers, subscribers, action servers/clients
-        self.get_logger().info('task_manager started')
+        self.cb = ReentrantCallbackGroup()
+        self.lock = threading.RLock()
+
+        p = self.declare_parameter
+        p('robot_id', 'pinky1')
+        p('same_object_radius', 0.3)
+        p('moving_threshold', 0.3)
+        p('moving_window', 2.0)
+        p('moving_min_samples', 3)
+        p('episode_gap', 3.0)
+        p('min_revisit_time', 20.0)
+        p('moving_gap', 10.0)
+        p('removed_frames', 15)
+        p('view_distance', 2.0)
+        p('camera_hfov', 1.085)            # rad (about 62 degrees)
+        p('follow_distance', 0.7)
+        p('lost_timeout', 5.0)
+        p('hold_duration', 5.0)
+        p('auto_start_patrol', True)
+        p('log_dir', '~/patrol_logs')
+        g = lambda name: self.get_parameter(name).value  # noqa: E731
+
+        self.registry = ObjectRegistry(RegistryConfig(
+            same_object_radius=g('same_object_radius'),
+            moving_threshold=g('moving_threshold'),
+            moving_window=g('moving_window'),
+            moving_min_samples=g('moving_min_samples'),
+            episode_gap=g('episode_gap'),
+            min_revisit_time=g('min_revisit_time'),
+            moving_gap=g('moving_gap'),
+            removed_frames=g('removed_frames'),
+            view_distance=g('view_distance'),
+            view_half_fov=g('camera_hfov') / 2.0,
+        ))
+        self.robot_id = g('robot_id')
+        self.follow_distance = g('follow_distance')
+        self.lost_timeout = g('lost_timeout')
+        self.hold_duration = g('hold_duration')
+
+        self.logger = EventLogger(g('log_dir'))
+        self.get_logger().info(f'Event log: {self.logger.path}')
+
+        # state
+        self.mode = STOPPED
+        self.robot_status = RobotState()
+        self.patrol_handle = None
+        self.patrol_pending = False
+        self.follow_handle = None
+        self.follow_marker = -1
+        self.hold_timer = None
+        self.restart_timer = None
+
+        # ROS interfaces
+        self.create_subscription(ObjectDetectionArray, '/perception/detections',
+                                 self.on_detections, 10, callback_group=self.cb)
+        self.create_subscription(RobotState, '/traffic/robot_status',
+                                 self.on_robot_status, 10, callback_group=self.cb)
+        self.create_subscription(String, '/traffic/events',
+                                 self.on_traffic_event, 50, callback_group=self.cb)
+        self.objects_pub = self.create_publisher(TrackedObjectArray, '/fleet/objects', 10)
+        self.state_pub = self.create_publisher(RobotState, '/fleet/robot_state', 10)
+        self.events_pub = self.create_publisher(String, '/fleet/events', 50)
+        self.history_pub = self.create_publisher(String, '/fleet/event_history', 1)
+        self.recent_events = deque(maxlen=500)
+        self.tf_static = StaticTransformBroadcaster(self)
+
+        self.create_service(AcknowledgeObject, '/fleet/acknowledge_object',
+                            self.on_acknowledge, callback_group=self.cb)
+        self.create_service(Trigger, '/fleet/start_patrol', self.on_start_patrol,
+                            callback_group=self.cb)
+        self.create_service(Trigger, '/fleet/stop_patrol', self.on_stop_patrol,
+                            callback_group=self.cb)
+        self.create_service(Trigger, '/fleet/stop_follow', self.on_stop_follow,
+                            callback_group=self.cb)
+
+        self.patrol_client = ActionClient(self, Patrol, '/traffic/patrol',
+                                          callback_group=self.cb)
+        self.follow_client = ActionClient(self, FollowTarget, '/traffic/follow_target',
+                                          callback_group=self.cb)
+        self.hold_client = self.create_client(HoldAndSignal, '/traffic/hold_and_signal',
+                                              callback_group=self.cb)
+
+        self.create_timer(0.5, self.publish_status, callback_group=self.cb)
+        self.create_timer(3.0, self.publish_history, callback_group=self.cb)
+        if g('auto_start_patrol'):
+            self.startup_timer = self.create_timer(2.0, self.try_auto_start,
+                                                   callback_group=self.cb)
+        self.emit({'event': 'task_manager_started', 'message': 'Task manager started'})
+
+    # ================================================================ events
+    def emit(self, ev, source='task_manager'):
+        """Publish an event to /fleet/events and write it to the CSV log."""
+        rs = self.robot_status
+        row = {
+            'time': datetime.now().isoformat(timespec='seconds'),
+            'source': source,
+            'marker_id': ev.get('marker_id', ''),
+            'event': ev.get('event', ''),
+            'state': ev.get('state', ''),
+            'warning_level': ev.get('level', ''),
+            'x_map': ev.get('x', ''),
+            'y_map': ev.get('y', ''),
+            'robot_x': round(rs.pose.x, 3),
+            'robot_y': round(rs.pose.y, 3),
+            'patrol_pass': rs.patrol_pass,
+            'message': ev.get('message', ''),
+        }
+        self.logger.log(**row)
+        self.recent_events.append(row)
+        self.events_pub.publish(String(data=json.dumps(row)))
+        level = ev.get('level', '')
+        if row['event'] in ('seen_again', 'moving', 'reacquired', 'lost_track'):
+            self.get_logger().warn(f"[L{level}] {row['message']}")
+        elif row['message']:
+            self.get_logger().info(row['message'])
+
+    def on_traffic_event(self, msg):
+        try:
+            ev = json.loads(msg.data)
+        except ValueError:
+            return
+        self.emit(ev, source='traffic_manager')
+
+    # ================================================================ inputs
+    def on_robot_status(self, msg):
+        self.robot_status = msg
+
+    def on_detections(self, msg):
+        now = self.get_clock().now().nanoseconds * 1e-9
+        rs = self.robot_status
+        with self.lock:
+            events = []
+            seen = set()
+            for det in msg.detections:
+                p = det.position_map.point
+                seen.add(det.marker_id)
+                events += self.registry.update(det.marker_id, p.x, p.y, now, rs.patrol_pass)
+            if self.mode in (PATROLLING, HOLDING):
+                events += self.registry.check_unseen(seen, rs.pose.x, rs.pose.y, rs.pose.theta)
+            for ev in events:
+                self.emit(ev)
+                self.react(ev)
+            if events:
+                self.publish_object_frames()
+
+    def react(self, ev):
+        obj = self.registry.get(ev['marker_id'])
+        action = action_for(ev, obj)
+        if action == HOLD and self.mode == PATROLLING:
+            self.start_hold(ev['marker_id'])
+        elif action == FOLLOW and self.mode != FOLLOWING:
+            self.start_follow(ev['marker_id'])
+
+    # ================================================================ patrol
+    def try_auto_start(self):
+        if not self.patrol_client.server_is_ready():
+            return
+        self.startup_timer.cancel()
+        self.start_patrol()
+
+    def start_patrol(self):
+        with self.lock:
+            if self.patrol_handle is not None or self.patrol_pending:
+                self.mode = PATROLLING
+                return True
+            if not self.patrol_client.server_is_ready():
+                self.get_logger().warn('Patrol action server not available')
+                return False
+            self.mode = PATROLLING
+            goal = Patrol.Goal(robot_id=self.robot_id)
+            future = self.patrol_client.send_goal_async(goal)
+            self.patrol_pending = True
+            future.add_done_callback(self.on_patrol_goal_response)
+        self.emit({'event': 'patrol_requested', 'message': 'Patrol started'})
+        return True
+
+    def on_patrol_goal_response(self, future):
+        handle = future.result()
+        with self.lock:
+            self.patrol_pending = False
+            if not handle.accepted:
+                self.emit({'event': 'patrol_rejected', 'message': 'Patrol goal rejected'})
+                return
+            self.patrol_handle = handle
+            if self.mode != PATROLLING:
+                # Something (hold/follow/stop) happened while the goal was pending.
+                handle.cancel_goal_async()
+        handle.get_result_async().add_done_callback(self.on_patrol_result)
+
+    def on_patrol_result(self, future):
+        res = future.result()
+        with self.lock:
+            self.patrol_handle = None
+            if res.status == GoalStatus.STATUS_CANCELED:
+                if self.mode == PATROLLING:
+                    # Cancelled while we already want to patrol again (e.g. hold ended
+                    # before the cancel finished): start a fresh patrol.
+                    self.schedule_restart(0.5)
+                return
+            reason = res.result.reason if res.result else 'unknown'
+            self.emit({'event': 'patrol_ended', 'message': f'Patrol ended: {reason}'})
+            if self.mode == PATROLLING:
+                # Unexpected end (e.g. navigation error): try again shortly.
+                self.schedule_restart(3.0)
+
+    def stop_patrol(self):
+        with self.lock:
+            handle = self.patrol_handle
+            if handle is not None:
+                handle.cancel_goal_async()
+            # A goal still pending is cancelled in on_patrol_goal_response.
+
+    def schedule_restart(self, delay):
+        if self.restart_timer is not None:
+            self.restart_timer.cancel()
+
+        def fire():
+            self.restart_timer.cancel()
+            self.restart_timer = None
+            if self.mode == PATROLLING and self.patrol_handle is None \
+                    and not self.patrol_pending:
+                self.start_patrol()
+        self.restart_timer = self.create_timer(delay, fire, callback_group=self.cb)
+
+    # ================================================================ hold (level 2)
+    def start_hold(self, marker_id):
+        self.mode = HOLDING
+        self.stop_patrol()
+        if self.hold_client.service_is_ready():
+            req = HoldAndSignal.Request(duration_sec=float(self.hold_duration), lamp='BLINK')
+            self.hold_client.call_async(req)
+        self.emit({'event': 'hold', 'marker_id': marker_id,
+                   'message': f'Holding {self.hold_duration:.0f} s for #{marker_id}'})
+        if self.hold_timer is not None:
+            self.hold_timer.cancel()
+
+        def done():
+            self.hold_timer.cancel()
+            self.hold_timer = None
+            with self.lock:
+                if self.mode == HOLDING:
+                    self.mode = PATROLLING
+                    if self.patrol_handle is None and not self.patrol_pending:
+                        self.start_patrol()
+        self.hold_timer = self.create_timer(self.hold_duration, done, callback_group=self.cb)
+
+    # ================================================================ follow (level 3)
+    def start_follow(self, marker_id):
+        if not self.follow_client.server_is_ready():
+            self.get_logger().warn('FollowTarget action server not available')
+            return
+        if self.hold_timer is not None:
+            self.hold_timer.cancel()
+            self.hold_timer = None
+        self.mode = FOLLOWING
+        self.follow_marker = marker_id
+        self.stop_patrol()
+        goal = FollowTarget.Goal(marker_id=marker_id,
+                                 follow_distance=float(self.follow_distance),
+                                 lost_timeout=float(self.lost_timeout))
+        self.emit({'event': 'follow_start', 'marker_id': marker_id, 'state': 'MOVING',
+                   'level': 3, 'message': f'Following #{marker_id}'})
+        self.follow_client.send_goal_async(goal).add_done_callback(self.on_follow_goal_response)
+
+    def on_follow_goal_response(self, future):
+        handle = future.result()
+        if not handle.accepted:
+            self.emit({'event': 'follow_rejected', 'message': 'Follow goal rejected'})
+            self.resume_after_follow()
+            return
+        self.follow_handle = handle
+        handle.get_result_async().add_done_callback(self.on_follow_result)
+
+    def on_follow_result(self, future):
+        res = future.result()
+        self.follow_handle = None
+        marker = self.follow_marker
+        reason = res.result.reason if res.result else 'cancelled'
+        if res.status == GoalStatus.STATUS_CANCELED:
+            reason = 'stopped by operator'
+        with self.lock:
+            lp = res.result.last_position if res.result else None
+            obj = self.registry.get(marker)
+            if obj is not None and obj.state in ('MOVING', 'LOST_TRACK'):
+                x = lp.x if lp is not None and (lp.x or lp.y) else None
+                y = lp.y if x is not None else None
+                for ev in self.registry.set_lost(marker, x, y):
+                    ev['message'] = f'Follow of #{marker} ended: {reason}'
+                    self.emit(ev)
+                self.publish_object_frames()
+        self.resume_after_follow()
+
+    def resume_after_follow(self):
+        with self.lock:
+            self.follow_marker = -1
+            if self.mode == FOLLOWING:
+                self.mode = PATROLLING
+                self.schedule_restart(1.0)
+
+    # ================================================================ services
+    def on_acknowledge(self, req, res):
+        with self.lock:
+            if req.clear:
+                events = self.registry.clear(req.marker_id)
+            else:
+                events = self.registry.acknowledge(req.marker_id)
+            for ev in events:
+                self.emit(ev)
+        res.success = bool(events)
+        res.message = events[0]['message'] if events else f'#{req.marker_id} not in registry'
+        return res
+
+    def on_start_patrol(self, req, res):
+        if self.follow_handle is not None:
+            self.follow_handle.cancel_goal_async()
+        ok = self.start_patrol()
+        res.success = ok
+        res.message = 'Patrol started' if ok else 'Patrol action server not available'
+        return res
+
+    def on_stop_patrol(self, req, res):
+        with self.lock:
+            self.mode = STOPPED
+            if self.hold_timer is not None:
+                self.hold_timer.cancel()
+                self.hold_timer = None
+        self.stop_patrol()
+        self.emit({'event': 'patrol_stopped', 'message': 'Patrol stopped by operator'})
+        res.success = True
+        res.message = 'Patrol stopped'
+        return res
+
+    def on_stop_follow(self, req, res):
+        if self.follow_handle is None:
+            res.success = False
+            res.message = 'Not following'
+            return res
+        self.follow_handle.cancel_goal_async()
+        res.success = True
+        res.message = 'Follow cancelled'
+        return res
+
+    # ================================================================ outputs
+    def publish_status(self):
+        rs = self.robot_status
+        out = RobotState()
+        out.robot_id = rs.robot_id or self.robot_id
+        out.pose = rs.pose
+        out.motion_state = rs.motion_state or 'UNKNOWN'
+        out.lamp = rs.lamp
+        out.patrol_pass = rs.patrol_pass
+        out.waypoint_index = rs.waypoint_index
+        out.task_state = self.mode
+        if rs.motion_state in ('PAUSED', 'ESTOP', 'ERROR'):
+            out.task_state = rs.motion_state if rs.motion_state != 'ESTOP' else 'EMERGENCY_STOP'
+        out.current_object_id = self.follow_marker
+        self.state_pub.publish(out)
+
+        arr = TrackedObjectArray()
+        arr.header.stamp = self.get_clock().now().to_msg()
+        arr.header.frame_id = 'map'
+        with self.lock:
+            for o in self.registry.objects.values():
+                m = TrackedObject()
+                m.marker_id = o.marker_id
+                m.position.x, m.position.y = float(o.x), float(o.y)
+                m.state = o.state
+                m.warning_level = o.warning_level
+                m.sightings = o.sightings
+                m.patrol_passes_seen = o.passes_seen
+                m.first_seen = to_time_msg(o.first_seen)
+                m.last_seen = to_time_msg(o.last_seen)
+                m.acknowledged = o.acknowledged
+                arr.objects.append(m)
+        self.objects_pub.publish(arr)
+
+    def publish_history(self):
+        self.history_pub.publish(String(data=json.dumps(list(self.recent_events))))
+
+    def publish_object_frames(self):
+        transforms = []
+        now = self.get_clock().now().to_msg()
+        for o in self.registry.objects.values():
+            if o.state == 'REMOVED':
+                continue
+            t = TransformStamped()
+            t.header.stamp = now
+            t.header.frame_id = 'map'
+            t.child_frame_id = f'suspicious_object_{o.marker_id}'
+            t.transform.translation.x = float(o.x)
+            t.transform.translation.y = float(o.y)
+            t.transform.rotation.w = 1.0
+            transforms.append(t)
+        if transforms:
+            self.tf_static.sendTransform(transforms)
+
+    def destroy_node(self):
+        self.logger.close()
+        super().destroy_node()
 
 
 def main(args=None):
@@ -29,3 +478,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+

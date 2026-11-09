@@ -1,18 +1,23 @@
+<!--
+  REAL robot. Start Pinky's bringup and Nav2 (with your saved map) first, then:
+    ros2 launch security_bringup patrol_system.launch.xml
+-->
 <launch>
+  <arg name="rosbridge" default="true"/>
   <let name="config_dir" value="$(find-pkg-share security_bringup)/config"/>
 
   <node pkg="security_perception" exec="perception" output="screen">
-    <param from="$(var config_dir)/rules.yaml"/>
+    <param from="$(var config_dir)/perception.yaml"/>
   </node>
 
   <node pkg="security_traffic_manager" exec="traffic_manager" output="screen">
     <param from="$(var config_dir)/patrol.yaml"/>
-    <param from="$(var config_dir)/rules.yaml"/>
   </node>
 
   <node pkg="security_task_manager" exec="task_manager" output="screen">
     <param from="$(var config_dir)/rules.yaml"/>
   </node>
 
-  <include file="$(find-pkg-share rosbridge_server)/launch/rosbridge_websocket_launch.xml"/>
+  <include if="$(var rosbridge)"
+           file="$(find-pkg-share rosbridge_server)/launch/rosbridge_websocket_launch.xml"/>
 </launch>

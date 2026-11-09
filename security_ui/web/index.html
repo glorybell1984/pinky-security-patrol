@@ -4,25 +4,173 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pinky Security Patrol</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
 </head>
 <body>
-  <header>
-    <h1>Pinky Security Patrol</h1>
-    <span id="connection">disconnected</span>
-    <button id="estop" type="button">EMERGENCY STOP</button>
+  <header class="topbar">
+    <div class="brand">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"></path><path d="M9 12l2 2 4-4"></path></svg>
+      <div>
+        <h1>Pinky Security Patrol</h1>
+        <p id="subtitle">Operator dashboard</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="pill"><span id="conn-dot" class="dot dot-off"></span><span id="conn-text">Connecting…</span></span>
+      <span class="pill mono" id="clock">--:--:--</span>
+      <button type="button" id="estop" class="btn-estop">EMERGENCY STOP</button>
+    </div>
   </header>
-  <nav>
-    <button type="button" data-tab="overview">Overview</button>
-    <button type="button" data-tab="objects">Object registry</button>
-    <button type="button" data-tab="log">Event log</button>
+
+  <nav class="tabs" aria-label="Dashboard sections">
+    <button type="button" class="tab" data-tab="overview" aria-pressed="true">Overview</button>
+    <button type="button" class="tab" data-tab="objects" aria-pressed="false">Object registry <span class="badge" id="badge-objects">0</span></button>
+    <button type="button" class="tab" data-tab="log" aria-pressed="false">Event log <span class="badge" id="badge-log">0</span></button>
   </nav>
-  <main>
-    <section id="overview"></section>
-    <section id="objects" hidden></section>
-    <section id="log" hidden></section>
+
+  <main class="content">
+    <section id="alert" class="alert" hidden aria-live="polite">
+      <div class="alert-text">
+        <span class="alert-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"></path><path d="M12 17h.01"></path><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"></path></svg>
+        </span>
+        <div>
+          <p id="alert-title" class="alert-title"></p>
+          <p id="alert-body" class="alert-body"></p>
+        </div>
+      </div>
+      <div class="row-gap">
+        <button type="button" id="alert-view" class="btn btn-outline-danger">View object</button>
+        <button type="button" id="alert-ack" class="btn btn-danger">Acknowledge</button>
+      </div>
+    </section>
+
+    <!-- ============================== Overview -->
+    <div id="tab-overview" class="tab-panel">
+      <section class="cards" aria-label="Summary">
+        <div class="card stat"><p class="stat-label">Robot state</p><p class="stat-value" id="s-task">—</p><p class="stat-sub" id="s-task-sub">Waiting for robot</p></div>
+        <div class="card stat"><p class="stat-label">Patrol pass</p><p class="stat-value" id="s-pass">—</p><p class="stat-sub" id="s-pass-sub"></p></div>
+        <div class="card stat"><p class="stat-label">Tracked objects</p><p class="stat-value" id="s-objects">0</p><p class="stat-sub" id="s-objects-sub">None yet</p></div>
+        <div class="card stat"><p class="stat-label">Robot position</p><p class="stat-value mono-num" id="s-pose">—</p><p class="stat-sub">map frame</p></div>
+      </section>
+
+      <div class="split">
+        <section class="card map-card" aria-label="Live map">
+          <div class="card-head">
+            <h2>Live map</h2>
+            <div class="legend">
+              <span><i class="sw sw-l1"></i>Level 1</span>
+              <span><i class="sw sw-l2"></i>Level 2</span>
+              <span><i class="sw sw-l3"></i>Level 3</span>
+              <span><i class="sw sw-removed"></i>Removed</span>
+              <span><i class="sw sw-wp"></i>Waypoint</span>
+            </div>
+          </div>
+          <div class="map-wrap"><canvas id="map" role="img" aria-label="Map with robot, patrol waypoints and tracked objects"></canvas></div>
+          <p class="hint" id="map-hint">Click an object on the map to open it in the registry.</p>
+          <div class="row-gap wrap controls">
+            <button type="button" class="btn" id="btn-start">Start patrol</button>
+            <button type="button" class="btn" id="btn-stop">Stop patrol</button>
+            <button type="button" class="btn" id="btn-pause">Pause robot</button>
+            <button type="button" class="btn" id="btn-unfollow">Stop following</button>
+          </div>
+        </section>
+
+        <aside class="side">
+          <section class="card" aria-label="Robot">
+            <h2 id="robot-name">Robot</h2>
+            <dl class="kv">
+              <div><dt>Task state</dt><dd id="r-task">—</dd></div>
+              <div><dt>Motion state</dt><dd id="r-motion">—</dd></div>
+              <div><dt>Lamp</dt><dd id="r-lamp">—</dd></div>
+              <div><dt>Current object</dt><dd id="r-object">—</dd></div>
+              <div><dt>Waypoint</dt><dd id="r-wp">—</dd></div>
+              <div><dt>Last update</dt><dd id="r-age">—</dd></div>
+            </dl>
+          </section>
+          <section class="card" aria-label="Camera">
+            <div class="card-head"><h2>Camera</h2><span class="mono small muted">/perception/debug_image</span></div>
+            <div class="camera"><img id="camera-img" alt="Annotated camera image" hidden><span id="camera-empty">No camera image yet</span></div>
+          </section>
+          <section class="card" id="sim-card" hidden aria-label="Simulation">
+            <div class="card-head"><h2>Fake Pinky</h2><span class="tag">simulation</span></div>
+            <p class="small muted">Act out the scenario: pick up an object, hide or remove it.</p>
+            <div id="sim-objects" class="sim-list"></div>
+          </section>
+        </aside>
+      </div>
+    </div>
+
+    <!-- ============================== Object registry -->
+    <div id="tab-objects" class="tab-panel" hidden>
+      <div class="split">
+        <section class="card grow" aria-label="Object registry">
+          <div class="card-head">
+            <div>
+              <h2>Object registry</h2>
+              <p class="small muted">Same object = same marker ID within 0.3 m · positions in the map frame (TF)</p>
+            </div>
+            <div class="row-gap wrap" role="group" aria-label="Filter objects" id="obj-filters"></div>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Marker</th><th>State</th><th>Level</th><th>Position (x, y)</th><th>Sightings</th><th>Passes</th><th>First seen</th><th>Last seen</th><th>Ack</th><th></th></tr></thead>
+              <tbody id="obj-rows"></tbody>
+            </table>
+          </div>
+          <p class="empty" id="obj-empty">No objects yet. They appear when the robot detects a marker.</p>
+        </section>
+
+        <aside class="card side" aria-label="Selected object" id="detail">
+          <div class="card-head"><h2 id="d-title">No object selected</h2><span id="d-level"></span></div>
+          <p class="small muted" id="d-summary">Select an object in the table or on the map.</p>
+          <dl class="kv" id="d-kv" hidden>
+            <div><dt>State</dt><dd id="d-state"></dd></div>
+            <div><dt>TF frame</dt><dd class="mono small" id="d-frame"></dd></div>
+            <div><dt>Logged position</dt><dd class="mono" id="d-pos"></dd></div>
+            <div><dt>Acknowledged</dt><dd id="d-ack"></dd></div>
+            <div><dt>Sightings</dt><dd id="d-sightings"></dd></div>
+            <div><dt>Passes seen</dt><dd id="d-passes"></dd></div>
+          </dl>
+          <h3 class="h3" id="d-hist-title" hidden>Position history (map frame)</h3>
+          <ol class="history" id="d-history"></ol>
+          <div class="row-gap wrap" id="d-actions" hidden>
+            <button type="button" class="btn btn-dark" id="d-ack-btn">Acknowledge</button>
+            <button type="button" class="btn" id="d-clear-btn">Clear from registry</button>
+            <button type="button" class="btn" id="d-log-btn">Show in log</button>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <!-- ============================== Event log -->
+    <div id="tab-log" class="tab-panel" hidden>
+      <section class="card" aria-label="Event log">
+        <div class="card-head">
+          <div>
+            <h2>Event log</h2>
+            <p class="small muted">Same columns as the task manager's CSV (~/patrol_logs) · newest first · this session only</p>
+          </div>
+          <div class="row-gap wrap">
+            <div class="row-gap wrap" role="group" aria-label="Filter events" id="log-filters"></div>
+            <button type="button" class="btn btn-sm" id="export">Export CSV</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table mono-table">
+            <thead><tr><th>Time</th><th>Source</th><th>Marker</th><th>Event</th><th>State</th><th>Level</th><th>Object (x, y)</th><th>Robot (x, y)</th><th>Pass</th><th>Message</th></tr></thead>
+            <tbody id="log-rows"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="log-empty">No events yet.</p>
+      </section>
+    </div>
   </main>
+
+  <div id="toast" class="toast" role="status" hidden></div>
   <script src="app.js"></script>
 </body>
 </html>

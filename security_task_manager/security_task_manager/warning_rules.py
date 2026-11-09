@@ -1,11 +1,20 @@
-"""Warning rules: decide state transitions and levels (see docs/architecture.md)."""
+"""Warning rules: which robot action each registry event triggers.
 
-LEVELS = {
-    'REPORTED': 1,
-    'PERSISTENT': 2,
-    'MOVING': 3,
-    'LOST_TRACK': 3,
-    'REMOVED': 0,
-}
+Kept separate from the registry so the response policy can change without
+touching the matching logic.
+"""
+from .object_registry import LEVELS  # noqa: F401  (re-exported for convenience)
 
-# TODO: functions that return the next state and the action for the traffic manager
+HOLD = 'hold'        # stop, blink the lamp, then resume patrol
+FOLLOW = 'follow'    # follow the moving object
+NONE = None
+
+
+def action_for(event, obj):
+    """Return the action for a registry event dict, or None."""
+    name = event['event']
+    if name == 'seen_again' and obj is not None and not obj.acknowledged:
+        return HOLD
+    if name in ('moving', 'reacquired'):
+        return FOLLOW
+    return NONE

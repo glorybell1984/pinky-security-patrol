@@ -28,13 +28,32 @@ source install/local_setup.bash
 
 Build from `~/patrol_ws`, not from `src/`.
 
+Extra apt packages if rosdep misses them:
+`sudo apt install ros-jazzy-rosbridge-suite python3-opencv`
+
 ## Run
 
 ```bash
+# Without the robot (simulated Pinky + world)
+ros2 launch security_bringup fake_robot.launch.xml
+
+# With the real Pinky (start Pinky bringup + Nav2 with the saved map first)
 ros2 launch security_bringup patrol_system.launch.xml
 ```
 
 Then open `security_ui/web/index.html` in a browser (rosbridge on port 9090).
+The full demo steps and the remaining real-robot checklist are in
+[docs/demo_guide.md](docs/demo_guide.md).
+
+## Status
+
+| Part | State |
+|---|---|
+| Object registry, warning levels 1-3, REMOVED, CSV log, object TF | Done, 14 unit tests |
+| Patrol loop, hold + turn to object, follow, lost track, pause / e-stop | Done, tested on fake Pinky |
+| ArUco perception (camera bearing + LiDAR / marker-size distance) | Done, tested with a synthetic image |
+| Dashboard (map, registry, event log, camera, controls, simulation) | Done |
+| Real camera topic, printed markers, map, waypoints, lamp bridge, tuning | **To do on the robot** |
 
 ## Warning levels
 
