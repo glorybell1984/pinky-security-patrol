@@ -1,0 +1,21 @@
+# colcon output (only src is committed)
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Runtime output
+security_bringup/logs/*
+!security_bringup/logs/.gitkeep
+*.bag
+rosbag2_*/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

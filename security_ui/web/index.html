@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pinky Security Patrol</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Pinky Security Patrol</h1>
+    <span id="connection">disconnected</span>
+    <button id="estop" type="button">EMERGENCY STOP</button>
+  </header>
+  <nav>
+    <button type="button" data-tab="overview">Overview</button>
+    <button type="button" data-tab="objects">Object registry</button>
+    <button type="button" data-tab="log">Event log</button>
+  </nav>
+  <main>
+    <section id="overview"></section>
+    <section id="objects" hidden></section>
+    <section id="log" hidden></section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

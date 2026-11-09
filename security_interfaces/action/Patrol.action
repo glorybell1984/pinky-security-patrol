@@ -1,0 +1,6 @@
+string robot_id
+---
+string reason                # cancelled, error
+---
+int32 patrol_pass
+int32 waypoint_index

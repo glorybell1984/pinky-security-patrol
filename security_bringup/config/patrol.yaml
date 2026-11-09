@@ -1,0 +1,6 @@
+traffic_manager:
+  ros__parameters:
+    robot_id: pinky1
+    namespace: ""                 # e.g. /pinky1 if the robot is namespaced
+    # Replace with /clicked_point values from your map: [x, y, yaw_deg, ...]
+    waypoints: [0.15, -3.61, 0.0, 0.94, -3.38, 0.0]

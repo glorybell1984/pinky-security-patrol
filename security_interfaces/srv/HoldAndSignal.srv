@@ -1,0 +1,4 @@
+float32 duration_sec
+string lamp                  # ON or BLINK
+---
+bool success

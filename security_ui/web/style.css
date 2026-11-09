@@ -1,0 +1,5 @@
+body { margin: 0; font-family: system-ui, sans-serif; background: #eef0f3; color: #15171a; }
+header { display: flex; gap: 16px; align-items: center; padding: 12px 24px; background: #15171a; color: #f5f6f8; }
+nav { display: flex; gap: 8px; padding: 12px 24px; }
+main { padding: 0 24px 24px; }
+#estop { margin-left: auto; min-height: 44px; padding: 0 20px; border: 0; border-radius: 8px; background: #dc2626; color: #fff; font-weight: 700; }

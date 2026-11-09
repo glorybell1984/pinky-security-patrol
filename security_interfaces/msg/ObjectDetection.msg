@@ -1,0 +1,4 @@
+int32 marker_id
+geometry_msgs/PointStamped position_map
+float32 distance
+float32 bearing

@@ -1,0 +1,5 @@
+int32 marker_id
+bool clear                   # true = remove from registry
+---
+bool success
+string message

@@ -1,0 +1,18 @@
+<launch>
+  <let name="config_dir" value="$(find-pkg-share security_bringup)/config"/>
+
+  <node pkg="security_perception" exec="perception" output="screen">
+    <param from="$(var config_dir)/rules.yaml"/>
+  </node>
+
+  <node pkg="security_traffic_manager" exec="traffic_manager" output="screen">
+    <param from="$(var config_dir)/patrol.yaml"/>
+    <param from="$(var config_dir)/rules.yaml"/>
+  </node>
+
+  <node pkg="security_task_manager" exec="task_manager" output="screen">
+    <param from="$(var config_dir)/rules.yaml"/>
+  </node>
+
+  <include file="$(find-pkg-share rosbridge_server)/launch/rosbridge_websocket_launch.xml"/>
+</launch>

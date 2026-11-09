@@ -1,0 +1,10 @@
+/**:
+  ros__parameters:
+    same_object_radius: 0.3       # m
+    moving_threshold: 0.3         # m within moving_window
+    moving_window: 2.0            # s
+    removed_frames: 15
+    max_detect_distance: 2.5      # m
+    follow_distance: 0.7          # m
+    lost_timeout: 5.0             # s
+    hold_duration: 5.0            # s, level 2

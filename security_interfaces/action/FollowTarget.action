@@ -1,0 +1,8 @@
+int32 marker_id
+float32 follow_distance
+float32 lost_timeout
+---
+string reason                # lost, cancelled, stopped
+geometry_msgs/Point last_position
+---
+float32 distance_to_target
