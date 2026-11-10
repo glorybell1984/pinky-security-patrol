@@ -4,6 +4,12 @@
 # pinky_pro URDF; still check them on the robot (docs/demo_guide.md).
 perception:
   ros__parameters:
+    # Camera: camera_server.py on the robot (Flask MJPEG, smooth over Wi-Fi).
+    # TODO(demo): robot IP. Check in a browser: http://<robot-ip>:5000/
+    image_source: http
+    stream_url: http://192.168.4.1:5000/video_feed
+    max_turn_rate: 0.6             # rad/s: skip frames while the robot turns faster
+    # image_source: ros  -> camera_publisher.py / ROS topic below
     image_topic: /camera/image_raw/compressed
     image_compressed: true
     scan_topic: /scan

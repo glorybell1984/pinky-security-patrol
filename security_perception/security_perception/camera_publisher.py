@@ -6,10 +6,14 @@ picamera2 on the robot, so this node reads it and publishes JPEG frames:
 
     /camera/image_raw/compressed   sensor_msgs/CompressedImage  (frame front_camera_link)
 
+Over Wi-Fi prefer camera_server.py (MJPEG over HTTP): ROS image topics stutter
+when packets are lost. Use this publisher with a wired / 5 GHz link, or to record
+images with ros2 bag.
+
 Only rclpy, sensor_msgs, OpenCV and the camera library are needed, so it also
 runs as a plain script without building this repository on the robot:
 
-    scp camera_publisher.py pinky@192.168.4.1:~/
+    scp camera_publisher.py camera_server.py pinky@192.168.4.1:~/
     ssh pinky@192.168.4.1
     python3 camera_publisher.py
     python3 camera_publisher.py --ros-args -p rotate:=0 -p fps:=10.0   # if upright already
@@ -31,56 +35,11 @@ ROTATIONS = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
              270: cv2.ROTATE_90_COUNTERCLOCKWISE}
 
 
-class PinkylibSource:
-    name = 'pinkylib'
-
-    def __init__(self, width, height):
-        from pinkylib import Camera
-        self.cam = Camera()
-        self.cam.start()
-
-    def read(self):
-        return self.cam.get_frame()
-
-    def close(self):
-        self.cam.close()
-
-
-class Picamera2Source:
-    name = 'picamera2'
-
-    def __init__(self, width, height):
-        from picamera2 import Picamera2
-        self.cam = Picamera2()
-        # "RGB888" in picamera2 is stored B, G, R in memory: already OpenCV order.
-        self.cam.configure(self.cam.create_preview_configuration(
-            main={'format': 'RGB888', 'size': (width, height)}))
-        self.cam.start()
-
-    def read(self):
-        return self.cam.capture_array()
-
-    def close(self):
-        self.cam.stop()
-        self.cam.close()
-
-
-class OpenCVSource:
-    name = 'opencv'
-
-    def __init__(self, width, height, device=0):
-        self.cap = cv2.VideoCapture(device)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        if not self.cap.isOpened():
-            raise RuntimeError(f'cannot open video device {device}')
-
-    def read(self):
-        ok, frame = self.cap.read()
-        return frame if ok else None
-
-    def close(self):
-        self.cap.release()
+# Camera reading is shared with camera_server.py (copy both files to the robot).
+try:
+    from .camera_server import open_source
+except ImportError:  # run as a plain script next to camera_server.py
+    from camera_server import open_source
 
 
 class CameraPublisher(Node):
@@ -117,20 +76,7 @@ class CameraPublisher(Node):
                                f'at {g("fps"):.0f} Hz')
 
     def open_source(self, backend, device):
-        order = ['pinkylib', 'picamera2', 'opencv'] if backend == 'auto' else [backend]
-        errors = []
-        for name in order:
-            try:
-                if name == 'pinkylib':
-                    return PinkylibSource(self.width, self.height)
-                if name == 'picamera2':
-                    return Picamera2Source(self.width, self.height)
-                if name == 'opencv':
-                    return OpenCVSource(self.width, self.height, device)
-            except Exception as exc:  # library missing or camera busy
-                errors.append(f'{name}: {exc}')
-        raise RuntimeError('No camera backend worked. Is another program (Jupyter, '
-                           'another camera node) using the camera?\n  ' + '\n  '.join(errors))
+        return open_source(backend, self.width, self.height, device)
 
     def tick(self):
         try:

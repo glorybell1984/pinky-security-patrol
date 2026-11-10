@@ -23,7 +23,7 @@ change the status. If the result shows a new limit, add a row.
 | 2 wheels + encoders | `/cmd_vel`, `/odom` | ✅ yes | Nav2, docking |
 | LiDAR (RPLidar C1, 2D) | `/scan`, frame `rplidar_link` (turned 180°) | ✅ yes | Nav2, object distance |
 | Battery voltage | `/battery/voltage`, `/battery/percent` every 5 s | ✅ yes | Go home, dock contact |
-| Camera (Pi camera) | none: only `pinkylib.Camera` / picamera2 | ❌ no node | `camera_publisher.py` |
+| Camera (Pi camera) | none: only `pinkylib.Camera` / picamera2 | ❌ no node | `camera_server.py` (Flask MJPEG) |
 | Front lamp | `/set_lamp` (`pinky_lamp_control`) | no | Warning levels |
 | LED ring (8 px) | `/set_led` (`pinky_led`) | no | Police lights |
 | LCD | `/set_emotion` (`pinky_emotion`) | no | Faces |
@@ -40,9 +40,10 @@ change the status. If the result shows a new limit, add a row.
 
 | # | Capability | Test | Result | Limit | Workaround | Status |
 |---|---|---|---|---|---|---|
-| C1 | Camera in ROS | Pinky bringup topics | No camera topic | No ROS camera node | `camera_publisher.py` on the robot | ✅ |
+| C1 | Camera in ROS | Pinky bringup topics | No camera topic | No ROS camera node | `camera_server.py` (HTTP) on the robot | ✅ |
 | C2 | Image orientation | Look at the image | Upside down (JW, 2026-11-10) | Mounted 180° | `rotate: 180` default | ✅ |
-| C3 | Frame rate over Wi-Fi | `ros2 topic hz /camera/image_raw/compressed` on the laptop | | Wi-Fi bandwidth | Lower `fps`, `jpeg_quality`, size | ⏳ |
+| C3 | Frame rate over Wi-Fi | `http://<robot>:5000/stats` + perception log "frames/s processed", at 640x480 and 320x240 | Fake test: 10 fps, ~9 KB/frame at 640x480 q70 | Wi-Fi bandwidth | Flask MJPEG (teacher's advice), lower fps first | ⏳ |
+| C3b | ROS image topic vs HTTP over Wi-Fi | Same settings, `image_source: ros` vs `http`, compare fps and stutter | | ROS images drop whole frames on packet loss | HTTP stream default | ⏳ |
 | C4 | Delay (camera -> laptop) | Film a stopwatch, compare with the dashboard | | Lag makes follow late | | ⏳ |
 | C5 | Max marker detection distance | 10 cm marker, step back 25 cm at a time; last distance with stable ID | | Small markers far away | Bigger markers | ⏳ |
 | C6 | Distance accuracy at 1 m | Tape measure vs dashboard distance | | No camera calibration | LiDAR distance (`auto`) | ⏳ |
@@ -50,7 +51,8 @@ change the status. If the result shows a new limit, add a row.
 | C8 | Low light | Room lights off, lamp on | | Camera noise | Front lamp as headlight | ⏳ |
 | C9 | Motion blur while driving | Detection rate at 0.1 vs 0.2 m/s | | Blur at speed | Slow near objects | ⏳ |
 | C10 | Field of view | Marker at 1 m, slide sideways until lost | | Sim value 66° used | Set `camera_hfov` | ⏳ |
-| C11 | One camera owner | Run two camera programs | Second one fails | Camera locked by one process | Only `camera_publisher.py` | ✅ |
+| C11 | One camera owner | Run two camera programs | Second one fails | Camera locked by one process | `camera_server.py` owns it; perception, dashboard and others share its stream | ✅ |
+| C13 | Frames have no timestamp (HTTP) | Turn in place with a marker in view, compare map position | | Pose taken at arrival time | Skip frames above 0.6 rad/s | ⏳ |
 | C12 | Person detection (YOLO) | `pinkylib` YOLO FPS on the Pi | | Pi CPU | Run on the laptop | ⏳ |
 
 ### LiDAR and navigation

@@ -80,7 +80,7 @@ ros2 launch pinky_bringup bringup_robot.launch.xml
 ros2 run pinky_lamp_control main_node
 ros2 run pinky_led led_server                      # optional, LED ring
 ros2 run pinky_emotion emotion_server              # optional, LCD faces
-python3 ~/camera_publisher.py                      # copy it once, see docs/demo_guide.md
+python3 ~/camera_server.py                         # Flask camera stream; copy it once, see docs/demo_guide.md
 
 # ---- Laptop
 ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map.yaml

@@ -1,5 +1,11 @@
 """Perception: ArUco markers -> object positions in the map frame.
 
+Camera input (image_source):
+    http   MJPEG stream from camera_server.py on the robot (smooth over Wi-Fi). Frames
+           have no ROS timestamp, so the newest TF is used, and frames taken while the
+           robot turns fast are skipped (the pose would be off).
+    ros    sensor_msgs image topic (camera_publisher.py, or Pinky's simulator).
+
 For each marker in a camera frame:
     bearing  = angle from the marker's pixel x and the camera field of view
     distance = LiDAR range at that bearing, or the marker-size estimate
@@ -11,6 +17,7 @@ Publishes
                                             also when empty; the task manager needs that
                                             to decide that an object is gone)
     /perception/debug_image/compressed      CompressedImage with boxes (for the dashboard)
+    /perception/stream_url                  String, 1 Hz: the camera stream for the dashboard
     /perception/dock                        PoseStamped (odom frame): the charging dock's
                                             marker, position + the direction its face points.
                                             Never reported as a suspicious object.
@@ -27,12 +34,14 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CompressedImage, Image, LaserScan
+from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from security_interfaces.msg import ObjectDetection, ObjectDetectionArray
 
 from .aruco_detector import (ArucoDetector, bearing_from_pixel,
                              distance_from_marker_size, lidar_range_at, marker_pose_in_base)
+from .mjpeg_reader import MjpegReader
 
 
 def yaw_from_quaternion(q):
@@ -44,6 +53,9 @@ class Perception(Node):
     def __init__(self):
         super().__init__('perception')
         p = self.declare_parameter
+        p('image_source', 'http')          # http (camera_server.py) | ros (image topic)
+        p('stream_url', 'http://192.168.4.1:5000/video_feed')
+        p('max_turn_rate', 0.6)            # rad/s, http: skip frames while turning faster
         p('image_topic', '/camera/image_raw/compressed')
         p('image_compressed', True)
         p('scan_topic', '/scan')
@@ -93,7 +105,21 @@ class Perception(Node):
         self.last_debug = 0.0
         self.warned_tf_time = False
 
-        if g('image_compressed'):
+        self.http = g('image_source') == 'http'
+        self.stream_url = g('stream_url')
+        self.max_turn_rate = g('max_turn_rate')
+        self.last_yaw = None
+        self.skipped_turning = 0
+        self.reader = None
+        if self.http:
+            self.reader = MjpegReader(self.stream_url, self.get_logger())
+            self.last_seq = -1
+            self.create_timer(self.min_period, self.on_stream_tick)
+            self.url_pub = self.create_publisher(String, '/perception/stream_url', 10)
+            self.create_timer(1.0, lambda: self.url_pub.publish(String(data=self.stream_url)))
+            self.create_timer(30.0, self.report_stream)
+            self.stream_count = 0
+        elif g('image_compressed'):
             self.create_subscription(CompressedImage, g('image_topic'), self.on_compressed,
                                      qos_profile_sensor_data)
         else:
@@ -106,7 +132,8 @@ class Perception(Node):
         self.debug_pub = self.create_publisher(CompressedImage,
                                                '/perception/debug_image/compressed', 5)
         self.get_logger().info(
-            f"Perception on {g('image_topic')} (distance: {self.distance_source}, "
+            f"Perception on {self.stream_url if self.http else g('image_topic')} "
+            f"(distance: {self.distance_source}, "
             f"marker {self.marker_size * 100:.0f} cm, {g('aruco_dictionary')})")
 
     # ------------------------------------------------------------------ inputs
@@ -121,6 +148,46 @@ class Perception(Node):
             self.lidar_yaw_from_tf = False
             self.get_logger().info(f'LiDAR frame {msg.header.frame_id} yaw '
                                    f'{math.degrees(self.lidar_yaw_offset):.0f} deg from TF')
+
+    def on_stream_tick(self):
+        item = self.reader.latest(self.last_seq)
+        if item is None:
+            return
+        self.last_seq, jpeg, arrival, _ = item
+        if time.monotonic() - arrival > 1.0:
+            return                               # stale frame (stream stalled)
+        frame = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            return
+        self.stream_count += 1
+        if self.turning_fast():
+            self.skipped_turning += 1
+            return
+        header = CompressedImage().header
+        header.stamp = self.get_clock().now().to_msg()
+        self.process(frame, header)
+
+    def turning_fast(self):
+        """Robot turn rate from odom TF between processed frames."""
+        try:
+            tf = self.tf_buffer.lookup_transform(self.odom_frame, self.base_frame, Time())
+        except TransformException:
+            return False
+        yaw = yaw_from_quaternion(tf.transform.rotation)
+        now = time.monotonic()
+        fast = False
+        if self.last_yaw is not None and now - self.last_yaw[0] > 1e-3:
+            dyaw = math.atan2(math.sin(yaw - self.last_yaw[1]), math.cos(yaw - self.last_yaw[1]))
+            fast = abs(dyaw) / (now - self.last_yaw[0]) > self.max_turn_rate
+        self.last_yaw = (now, yaw)
+        return fast
+
+    def report_stream(self):
+        self.get_logger().info(
+            f'Camera stream: {self.stream_count / 30.0:.1f} frames/s processed'
+            + (f', {self.skipped_turning} skipped while turning' if self.skipped_turning else '')
+            + ('' if self.reader.connected else ' (NOT connected)'))
+        self.stream_count = self.skipped_turning = 0
 
     def on_compressed(self, msg):
         if not self.ready_for_frame():
@@ -154,11 +221,15 @@ class Perception(Node):
         The fallback matters when the robot's clock and the laptop's clock differ.
         """
         try:
+            if self.http:
+                raise TransformException('no image time')   # stream frames: newest TF
             return self.tf_buffer.lookup_transform(self.global_frame, self.base_frame,
                                                    Time.from_msg(stamp),
                                                    timeout=Duration(seconds=0.05))
         except TransformException:
-            if not self.warned_tf_time:
+            if self.http:
+                pass
+            elif not self.warned_tf_time:
                 self.get_logger().warn('TF at image time not available, using latest '
                                        '(check clock sync between robot and laptop)')
                 self.warned_tf_time = True
@@ -236,6 +307,8 @@ class Perception(Node):
             return 'DOCK ?'
         x, y, nyaw = est
         try:
+            if self.http:
+                raise TransformException('no image time')
             tf = self.tf_buffer.lookup_transform(self.odom_frame, self.base_frame,
                                                  Time.from_msg(header.stamp),
                                                  timeout=Duration(seconds=0.05))
@@ -287,6 +360,8 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        if node.reader is not None:
+            node.reader.stop()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

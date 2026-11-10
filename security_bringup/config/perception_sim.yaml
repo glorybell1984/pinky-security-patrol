@@ -3,6 +3,7 @@
 # The simulator publishes a raw image on /camera/image_raw.
 perception:
   ros__parameters:
+    image_source: ros              # the simulator publishes a ROS image topic
     image_topic: /camera/image_raw
     image_compressed: false
     scan_topic: /scan

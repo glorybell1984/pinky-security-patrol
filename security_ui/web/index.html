@@ -94,8 +94,14 @@
             </dl>
           </section>
           <section class="card" aria-label="Camera">
-            <div class="card-head"><h2>Camera</h2><span class="mono small muted">/perception/debug_image</span></div>
-            <div class="camera"><img id="camera-img" alt="Annotated camera image" hidden><span id="camera-empty">No camera image yet</span></div>
+            <div class="card-head"><h2>Camera</h2>
+              <span class="seg" role="group" aria-label="Camera view">
+                <button type="button" class="btn btn-sm" id="cam-live" aria-pressed="true">Live</button>
+                <button type="button" class="btn btn-sm" id="cam-det" aria-pressed="false">Detections</button>
+              </span>
+            </div>
+            <div class="camera"><img id="camera-img" alt="Robot camera" hidden><span id="camera-empty">No camera image yet</span></div>
+            <p class="small muted mono" id="camera-src">—</p>
           </section>
           <section class="card" id="sim-card" hidden aria-label="Simulation">
             <div class="card-head"><h2>Fake Pinky</h2><span class="tag">simulation</span></div>

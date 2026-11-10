@@ -68,7 +68,7 @@ Checked against [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro
 |---|---|---|
 | Base frame | `base_footprint` (URDF root, AMCL `base_frame_id`) | `base_frame: base_footprint` |
 | LiDAR | `/scan`, frame `rplidar_link`, **turned 180°** in the URDF | perception reads the yaw from TF (`lidar_yaw_from_tf`) |
-| Camera | **No camera node in `bringup_robot`**. Only `pinkylib.Camera` / picamera2 on the robot | our `camera_publisher.py` runs on the robot |
+| Camera | **No camera node in `bringup_robot`**. Only `pinkylib.Camera` / picamera2 on the robot | our `camera_server.py` (Flask MJPEG) runs on the robot |
 | Camera pose | `front_camera_link` 0.035 m ahead of `base_link`, tilted 8° down; sim FOV 1.1519 rad | `camera_offset_x: 0.035`, `camera_hfov: 1.1519` |
 | Battery | `battery_publisher` (in `bringup_robot`): `/battery/voltage`, `/battery/percent` (Float32, every 5 s). Pinky warns at 6.8 V | task manager: LOW 7.0 V, CRITICAL 6.8 V |
 | Lamp | `pinky_lamp_control` service `/set_lamp` (`SetLamp`: color, mode 0 off / 1 on / 2 blink / 3 dimming, time ms). **Not started by bringup** | traffic manager calls `/set_lamp` |
@@ -102,7 +102,7 @@ ros2 launch pinky_bringup bringup_robot.launch.xml
 ros2 run pinky_lamp_control main_node
 ros2 run pinky_led led_server                      # optional, LED ring (police lights)
 ros2 run pinky_emotion emotion_server              # optional, LCD faces
-python3 ~/camera_publisher.py                      # see "Camera on the robot"
+python3 ~/camera_server.py                         # Flask camera stream, see "Camera on the robot"
 
 # ---- Laptop
 ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map.yaml
@@ -115,21 +115,36 @@ Close Jupyter notebooks that use the camera, or the camera publisher cannot open
 
 ### Camera on the robot
 
-Copy one file to the robot. It only needs rclpy, OpenCV and pinkylib / picamera2,
-so the rest of this repository does not have to be built there:
+The camera runs as a small **Flask MJPEG server** on the robot (`camera_server.py`),
+as the Pinky Pro teacher recommends: over Wi-Fi one HTTP stream is smoother than
+ROS image topics. Perception on the laptop and the dashboard both read this stream.
+It needs only OpenCV, Flask and pinkylib / picamera2, so copy the file and run it:
 
 ```bash
-scp ~/patrol_ws/src/pinky-security-patrol/security_perception/security_perception/camera_publisher.py pinky@192.168.4.1:~/
+scp ~/patrol_ws/src/pinky-security-patrol/security_perception/security_perception/camera_server.py pinky@192.168.4.1:~/
 ssh pinky@192.168.4.1
-python3 ~/camera_publisher.py
-python3 ~/camera_publisher.py --ros-args -p rotate:=0       # turned 180 by default (Pinky Pro); 0 if then upside down
-python3 ~/camera_publisher.py --ros-args -p swap_rb:=true   # if red and blue are swapped
-python3 ~/camera_publisher.py --ros-args -p backend:=picamera2 -p fps:=10.0
+python3 -c "import flask" || pip install flask
+python3 ~/camera_server.py                                   # 640x480, 10 fps, quality 70, turned 180
+python3 ~/camera_server.py --width 320 --height 240 --fps 15 # smaller, if the Wi-Fi struggles
+python3 ~/camera_server.py --rotate 0                        # if the image is then upside down
+python3 ~/camera_server.py --swap-rb                         # if red and blue are swapped
 ```
 
-Check on the laptop: `ros2 topic hz /camera/image_raw/compressed` (expect ~15 Hz)
-and the camera panel on the dashboard. If the Wi-Fi is slow, lower `fps` or
-`jpeg_quality` (default 80), or `width`/`height` (default 640x480).
+Check in a browser: `http://<robot-ip>:5000/` (the stream) and `http://<robot-ip>:5000/stats`
+(real fps, KB per frame, viewers). Then set `stream_url` in `config/perception.yaml`.
+
+| Setting | Trade-off |
+|---|---|
+| Lower resolution | Smoother, but markers readable only about half as far (≈1.5 m at 320x240 vs ≈3 m at 640x480, estimate) and noisier dock pose |
+| Lower fps | Patrol is only 0.2 m/s, so 5-10 fps loses little. Keep resolution, cut fps first |
+| Lower quality | Smaller frames; below ~50 marker edges get blurry |
+
+Stream frames have no ROS timestamp, so perception uses the newest robot pose and
+skips frames while the robot turns faster than `max_turn_rate` (0.6 rad/s).
+
+`camera_publisher.py` (ROS topic) is still there for a wired / 5 GHz link or for
+`ros2 bag`: set `image_source: ros` in `perception.yaml` and copy both
+`camera_publisher.py` and `camera_server.py` to the robot.
 
 ### Test in Pinky's simulator first (optional)
 
@@ -148,7 +163,7 @@ The simulator world has no ArUco markers, so this tests patrol, pause, e-stop an
 
 | # | Task | Where | How to check |
 |---|---|---|---|
-| 1 | **Camera publisher** on the robot | `camera_publisher.py` params `rotate`, `swap_rb` | Dashboard camera panel: upright image, correct colors, ~15 Hz |
+| 1 | **Camera server** on the robot | `camera_server.py --rotate --swap-rb --width --fps`, `stream_url` in perception.yaml | Dashboard live view: upright, correct colors; `/stats` fps close to target |
 | 2a | **Class markers?** | `ros2 run security_perception find_dictionary` with a marker in front of the camera | Prints the dictionary; set `aruco_dictionary` |
 | 2 | **Print ArUco markers** (DICT_4X4_50) | `ros2 run security_perception make_markers --ids 3 5 7` | Black square = `marker_size` (default 10 cm). Measure it. (The class pinkylib markers are a different set; use ours) |
 | 3 | **Test detection** | Dashboard camera panel shows boxes + distance | Distance within ~10 cm at 1 m. Find the max detection distance |
