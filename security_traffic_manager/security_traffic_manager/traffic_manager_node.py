@@ -95,6 +95,12 @@ class TrafficManager(Node):
         p('dock_contact_timeout', 12.0)         # s (Pinky's battery topic is every 5 s)
         p('dock_undock_distance', 0.35)
         p('dock_us_stop_range', 0.0)            # m, ultrasonic stop, 0 = off
+        # two-phase docking: align at the pre-dock point, then straight in (0 = off)
+        p('dock_predock_distance', 0.0)         # m from the dock marker, e.g. 0.25
+        p('dock_align_lateral_tolerance', 0.006)  # m
+        p('dock_align_heading_tolerance_deg', 1.5)
+        p('dock_settle_time', 0.6)              # s still before measuring
+        p('dock_final_speed', 0.05)             # m/s straight run onto the contacts
         p('battery_voltage_topic', '/battery/voltage')
         p('batt_state_topic', '/batt_state')    # pinky_sensor_adc, '' to ignore
         p('us_topic', '/us_sensor/range')
@@ -127,6 +133,11 @@ class TrafficManager(Node):
             contact_timeout=g('dock_contact_timeout'),
             undock_distance=g('dock_undock_distance'),
             us_stop_range=g('dock_us_stop_range'),
+            predock_distance=g('dock_predock_distance'),
+            align_lateral_tolerance=g('dock_align_lateral_tolerance'),
+            align_heading_tolerance=math.radians(g('dock_align_heading_tolerance_deg')),
+            settle_time=g('dock_settle_time'),
+            final_speed=g('dock_final_speed'),
         )
         self.dock_est = DockEstimate()
         self.contact = ContactDetector(g('dock_contact_rise'))

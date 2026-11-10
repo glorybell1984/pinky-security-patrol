@@ -172,7 +172,7 @@ ros2 topic pub --once /fake_pinky/command std_msgs/msg/String "{data: 'pickup 7'
 ```bash
 cd ~/patrol_ws/src/pinky-security-patrol
 python3 -m pytest security_task_manager/test       # registry + battery (21 tests)
-python3 -m pytest security_traffic_manager/test    # docking math (5 tests)
+python3 -m pytest security_traffic_manager/test    # docking math + closed-loop docking (9 tests)
 ```
 
 ## Status

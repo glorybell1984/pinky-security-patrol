@@ -46,4 +46,10 @@ traffic_manager:
     dock_contact_timeout: 12.0       # s (/battery/voltage comes every 5 s)
     dock_undock_distance: 0.35
     dock_us_stop_range: 0.0          # m, stop on the ultrasonic (pinky_sensor_adc); 0 = off
+    # Two-phase docking (docs/docking.md): stop at this distance from the marker,
+    # line up while standing still, then drive straight in without the marker.
+    # 0 = single-phase (default, faster). Try 0.25 if the marker is lost up close.
+    dock_predock_distance: 0.0
+    dock_align_lateral_tolerance: 0.006    # m
+    dock_align_heading_tolerance_deg: 1.5
     start_docked: false              # true if the robot starts on the dock

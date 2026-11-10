@@ -40,6 +40,43 @@ kept in the **odom frame**, so between camera frames, and in the last
 centimetres where the marker may be too close to see, odometry keeps the
 control smooth.
 
+## Two-phase docking (option)
+
+Set `dock_predock_distance` (e.g. `0.25`) in `patrol.yaml` to dock in two phases
+instead of following the marker all the way in:
+
+| Phase | What happens |
+|---|---|
+| 1. Approach | Follow the dock line as above, but stop at the pre-dock point (0.25 m from the marker) |
+| Align | Stand still 0.6 s so the marker estimate settles, then check the error. Heading off: turn on the spot. Off the line: turn, drive about 6 cm, turn back. Up to 2 corrections, then back off and retry |
+| 2. Final | Straight in on odometry only, at 5 cm/s. The marker is not needed |
+
+The dashboard log shows the measured error at the pre-dock point
+(`Docking: aligned at the pre-dock point (sideways +3 mm, heading +0.7 deg, ...)`),
+which is useful for tuning on the real robot.
+
+**Default is off (0.0)**, because in simulation single-phase is faster and just as precise:
+
+| 50 dockings, Nav2 error ±15 cm / ±14°, 3 % wheel slip | Contacts | Retries | Max sideways | Median time | Worst |
+|---|---|---|---|---|---|
+| Single-phase (`dock_predock_distance: 0.0`) | 50/50 | 1 | 6 mm | 10 s | 20 s |
+| Two-phase (`0.25`) | 50/50 | 1-3 | 6-9 mm | 13 s | 35 s |
+
+Why: the marker angle gets *more* precise as the robot gets closer (about ±2.3°
+at 0.3 m, ±1.3° at 0.2 m), so single-phase keeps correcting with its best data,
+while two-phase stops using the camera exactly there. And a robot that cannot
+move sideways needs a stop-turn-drive-turn to fix a sideways error, which is slow.
+
+**Use two-phase when** the camera cannot read the marker reliably up close
+(blurry, marker leaves the image, flicker in the last 20 cm): single-phase then
+reports "marker lost" or "not lined up", two-phase does not need the marker below
+the pre-dock point. Tolerances: `dock_align_lateral_tolerance` (6 mm) and
+`dock_align_heading_tolerance_deg` (1.5°).
+
+Tests: `security_traffic_manager/test/test_docking_sim.py` runs the real
+controller against a simulated robot, camera and dock on a fake clock
+(both modes, 20 dockings each, in under a second).
+
 ## Fake Pinky results
 
 | Test | Result |

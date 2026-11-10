@@ -5,10 +5,23 @@ staging point in front of the dock, not to touch charging contacts. From the
 staging point this controller drives with cmd_vel:
 
     1. ACQUIRE   wait for the dock marker; turn slowly left and right if not seen
-    2. APPROACH  follow the dock's centre line (pure pursuit to the line), slowing
-                 down as the contacts get close
-    3. CONTACT   stop, wait for charging to be detected (battery voltage rise);
+    2. APPROACH  follow the dock's centre line (pure pursuit to the line) up to
+                 the pre-dock point (predock_distance, e.g. 0.30 m)
+    3. ALIGN     stop and let the marker estimate settle (averaging while still is
+                 much more precise than while driving), then check the sideways
+                 and heading error. Heading off: turn on the spot. Off the line:
+                 turn - drive - turn onto the line. Up to align_corrections times,
+                 else back off and try again
+    4. FINAL     drive straight in on odometry only, no marker needed (it may be
+                 too close to see)
+    5. CONTACT   stop, wait for charging to be detected (battery voltage rise);
                  nudge 1 cm once; if nothing, back off and try again
+
+predock_distance = 0 (default) skips ALIGN/FINAL: APPROACH then follows the
+line all the way to the contacts (single-phase). In simulation single-phase is
+faster (median 10 s vs 13-15 s) and as precise, because the marker angle gets
+more precise as the robot gets closer. Two-phase is for a camera that cannot
+read the marker reliably up close: it needs no marker below the pre-dock point.
 
 The dock estimate lives in the odom frame: each marker sighting updates it, and
 between camera frames (or when the marker is too close to see) the robot's own
@@ -60,6 +73,18 @@ class DockConfig:
     max_accel: float = 0.15          # m/s^2, speed changes gradually (no jerks, no wheel slip)
     max_ang_accel: float = 1.0       # rad/s^2
     us_stop_range: float = 0.0       # m, ultrasonic stop (0 = not used)
+    # two-phase docking: align at the pre-dock point, then straight in
+    predock_distance: float = 0.0    # m from the marker (e.g. 0.25); 0 = single-phase
+    settle_time: float = 0.6         # s standing still before measuring the error
+    settle_min_obs: int = 4          # marker sightings needed while settling
+    align_lateral_tolerance: float = 0.006   # m sideways error allowed before FINAL
+    align_heading_tolerance: float = 0.026   # rad (~1.5 deg) heading error allowed
+    align_corrections: int = 2       # correction moves before giving up (back off)
+    correction_step: float = 0.06    # m along the line for a sideways correction
+    min_final_distance: float = 0.06  # m, keep at least this much straight run
+    rotate_tolerance: float = 0.007  # rad (~0.4 deg), turn-on-the-spot accuracy
+    rotate_min_speed: float = 0.12   # rad/s, below this the motors may not turn
+    final_speed: float = 0.05        # m/s, straight run onto the contacts
 
 
 class DockEstimate:
@@ -158,6 +183,7 @@ class DockingController:
         self.get_us_range = get_us_range or (lambda: None)
         self.detect_contact = detect_contact
         self.phase = 'IDLE'
+        self.align_error = None          # last ALIGN measurement: x, y, heading err, try
         self._v = 0.0
         self._w = 0.0
 
@@ -186,8 +212,9 @@ class DockingController:
             time.sleep(0.1)
         return not should_stop()
 
-    def drive_straight(self, distance, speed, should_stop, is_paused):
-        """Drive straight (negative distance = backwards) measured by odometry."""
+    def drive_straight(self, distance, speed, should_stop, is_paused, stop_check=None):
+        """Drive straight (negative distance = backwards) measured by odometry.
+        stop_check(): optional, True ends the drive early (e.g. ultrasonic)."""
         start = self.a.odom_pose()
         if start is None:
             return False
@@ -205,6 +232,8 @@ class DockingController:
             done = math.hypot(p[0] - start[0], p[1] - start[1])
             if done >= target or time.monotonic() > deadline:
                 break
+            if stop_check is not None and stop_check():
+                break
             remaining = target - done
             v = sign * clamp(remaining * 1.5, 0.02, speed)
             # keep the start heading
@@ -213,6 +242,33 @@ class DockingController:
             self._sleep()
         self._halt()
         return True
+
+    def rotate_to(self, yaw_odom, should_stop, is_paused, timeout=8.0):
+        """Turn on the spot to an odom-frame heading."""
+        c = self.cfg
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self._wait_paused(should_stop, is_paused):
+                self._halt()
+                return False
+            p = self.a.odom_pose()
+            if p is None:
+                self._sleep()
+                continue
+            err = wrap(yaw_odom - p[2])
+            if abs(err) <= c.rotate_tolerance:
+                break
+            w = clamp(2.0 * err, -0.4, 0.4)
+            if abs(w) < c.rotate_min_speed:
+                w = math.copysign(c.rotate_min_speed, err)
+            self._cmd(0.0, w)
+            self._sleep()
+        self._halt()
+        return True
+
+    def _us_hit(self):
+        us = self.get_us_range()
+        return self.cfg.us_stop_range > 0 and us is not None and us <= self.cfg.us_stop_range
 
     def at_dock(self):
         """True when a recent marker sighting says the robot sits on the dock."""
@@ -254,11 +310,14 @@ class DockingController:
         self._halt()
         return False
 
-    def approach(self, should_stop, is_paused):
-        """Follow the dock line to docked_distance. Returns 'arrived', 'lost',
-        'misaligned' or 'aborted'."""
+    def approach(self, should_stop, is_paused, stop_at=None):
+        """Follow the dock line to stop_at (default: docked_distance). Returns
+        'arrived', 'lost', 'misaligned' or 'aborted'. The "lined up in the last
+        8 cm" check only applies when driving all the way to the contacts."""
         self.phase = 'APPROACH'
         c = self.cfg
+        to_contacts = stop_at is None
+        stop_at = c.docked_distance if to_contacts else stop_at
         while True:
             if not self._wait_paused(should_stop, is_paused):
                 self._halt()
@@ -268,22 +327,21 @@ class DockingController:
                 self._sleep()
                 continue
             x, y, heading = self.est.robot_in_dock(*p)
-            remaining = x - c.docked_distance
+            remaining = x - stop_at
             if remaining <= c.stop_tolerance:
                 self._halt()
                 return 'arrived'
-            us = self.get_us_range()
-            if c.us_stop_range > 0 and us is not None and us <= c.us_stop_range:
+            if self._us_hit():
                 self._halt()
                 return 'arrived'
-            if not self.est.fresh(c.obs_timeout) and remaining > c.blind_distance:
+            if not self.est.fresh(c.obs_timeout) and x - c.docked_distance > c.blind_distance:
                 self._halt()
                 return 'lost'
 
             # facing the dock = heading pi in the dock frame; aim at a point on the line
             target = math.atan2(-y, -c.lookahead)
             err = wrap(target - heading)
-            if remaining < 0.08 and (abs(y) > c.lateral_tolerance
+            if to_contacts and remaining < 0.08 and (abs(y) > c.lateral_tolerance
                                      or abs(wrap(math.pi - heading)) > c.heading_tolerance):
                 self._halt()
                 return 'misaligned'
@@ -294,6 +352,71 @@ class DockingController:
                 v = 0.0                      # turn in place first
             self._cmd(v, w)
             self._sleep()
+
+    def settle(self, should_stop, is_paused):
+        """Stand still and let the marker estimate settle. Returns the robot's
+        (x, y, heading error) in the dock frame, None if the marker was not seen
+        enough, or 'aborted'."""
+        self._halt()
+        c = self.cfg
+        start_count = self.est.count
+        end = time.monotonic() + c.settle_time
+        while time.monotonic() < end or self.est.count - start_count < c.settle_min_obs:
+            if not self._wait_paused(should_stop, is_paused):
+                return 'aborted'
+            if time.monotonic() > end + 1.0:
+                return None                      # marker not seen while standing still
+            self._sleep()
+        p = self.a.odom_pose()
+        if p is None:
+            return None
+        x, y, heading = self.est.robot_in_dock(*p)
+        return x, y, wrap(math.pi - heading)
+
+    def align(self, should_stop, is_paused):
+        """At the pre-dock point: measure, correct, measure again. Returns
+        'aligned', 'misaligned', 'lost' or 'aborted'."""
+        self.phase = 'ALIGN'
+        c = self.cfg
+        for attempt in range(c.align_corrections + 1):
+            m = self.settle(should_stop, is_paused)
+            if m == 'aborted':
+                return 'aborted'
+            if m is None:
+                return 'lost'
+            x, y, herr = m
+            self.align_error = (x, y, herr, attempt)
+            if abs(y) <= c.align_lateral_tolerance and abs(herr) <= c.align_heading_tolerance:
+                return 'aligned'
+            if attempt == c.align_corrections:
+                break
+            if abs(y) > c.align_lateral_tolerance:
+                # turn - drive - turn onto the line. Go forward if there is room for
+                # the straight run afterwards, else backwards (marker gets farther).
+                forward = x - c.correction_step >= c.docked_distance + c.min_final_distance
+                tx = x - c.correction_step if forward else x + c.correction_step
+                dist = math.hypot(c.correction_step, y)
+                direction = math.atan2(-y, tx - x)       # robot -> target, dock frame
+                face = direction if forward else wrap(direction + math.pi)
+                if not self.rotate_to(wrap(face + self.est.yaw), should_stop, is_paused):
+                    return 'aborted'
+                if not self.drive_straight(dist if forward else -dist, 0.05,
+                                           should_stop, is_paused):
+                    return 'aborted'
+            # face the dock (heading pi in the dock frame)
+            if not self.rotate_to(wrap(math.pi + self.est.yaw), should_stop, is_paused):
+                return 'aborted'
+        return 'misaligned'
+
+    def final(self, should_stop, is_paused):
+        """Straight in to the contacts on odometry. Returns True, or False if stopped."""
+        self.phase = 'FINAL'
+        p = self.a.odom_pose()
+        if p is None:
+            return False
+        x, _, _ = self.est.robot_in_dock(*p)
+        return self.drive_straight(x - self.cfg.docked_distance, self.cfg.final_speed,
+                                   should_stop, is_paused, stop_check=self._us_hit)
 
     def wait_contact(self, should_stop, is_paused):
         self.phase = 'CONTACT'
@@ -330,7 +453,20 @@ class DockingController:
                 reason = 'dock marker not found'
                 continue
             self.contact.mark()
-            result = self.approach(should_stop, is_paused)
+            two_phase = c.predock_distance > c.docked_distance + c.min_final_distance
+            result = self.approach(should_stop, is_paused,
+                                   c.predock_distance if two_phase else None)
+            if result == 'arrived' and two_phase:
+                self.align_error = None
+                result = self.align(should_stop, is_paused)
+                if self.align_error is not None:
+                    _, y, herr, tries = self.align_error
+                    self.emit({'event': 'dock_align', 'message':
+                               f'Docking: {result} at the pre-dock point (sideways '
+                               f'{y * 1000:+.0f} mm, heading {math.degrees(herr):+.1f} deg, '
+                               f'{tries} correction(s))'})
+                if result == 'aligned':
+                    result = 'arrived' if self.final(should_stop, is_paused) else 'aborted'
             if result == 'aborted':
                 return 'aborted'
             if result != 'arrived':
