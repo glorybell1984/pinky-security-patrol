@@ -40,7 +40,7 @@
     </node>
     <node pkg="security_task_manager" exec="task_manager" output="screen">
       <param from="$(var config_dir)/rules.yaml"/>
-      <param name="camera_hfov" value="1.1519"/>
+      <param name="camera_hfov" value="1.0423"/>   <!-- real Pinky camera, measured -->
       <param name="auto_start_patrol" value="true"/>
     </node>
   </group>

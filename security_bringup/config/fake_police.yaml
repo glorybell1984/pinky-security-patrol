@@ -14,7 +14,7 @@ fake_pinky:
     carry_path: [1.10, 3.30, 1.00, 2.40, 1.00, 1.50, 0.60, 0.55]   # "pickup 42" walks it down
     person_speed: 0.15
     hide_after_carry: 4.0
-    camera_hfov: 1.1519                  # Pinky camera (perception.yaml)
+    camera_hfov: 1.0423                  # real Pinky camera, measured (perception.yaml)
     detect_range: 0.6                    # 2.7 cm marker: readable to about 0.5-0.6 m
     detect_noise: 0.02
     detect_rate: 10.0

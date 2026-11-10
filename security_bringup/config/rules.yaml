@@ -14,7 +14,7 @@ task_manager:
                                   # object marker is not readable much farther (synthetic
                                   # test: 100 % up to 0.5 m, 40-65 % at 0.7-1.0 m).
                                   # With a 10 cm marker use 1.5. Fake Pinky: 2.0 (launch)
-    camera_hfov: 1.085            # rad, must match the perception setting
+    camera_hfov: 1.0423           # rad, must match the perception setting (real camera, measured)
     follow_distance: 0.7          # m
     lost_timeout: 5.0             # s
     hold_duration: 5.0            # s, level 2 stop with blinking lamp

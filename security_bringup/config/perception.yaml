@@ -9,7 +9,8 @@ perception:
     scan_topic: /scan
     global_frame: map
     base_frame: base_footprint     # Pinky URDF root; AMCL also uses it
-    camera_hfov: 1.1519            # rad (66 deg), Pinky sim camera. TODO(demo): measure
+    camera_hfov: 1.0423            # rad (59.7 deg), measured: marker 66 read 44.2 cm, ruler 50 cm
+                                   # (the Pinky simulator camera is 66 deg / 1.1519)
     camera_offset_x: 0.035         # m, front_camera_link ahead of base_link (URDF)
     camera_flip: false             # true if the image is upside down
     aruco_dictionary: DICT_5X5_100 # the printed demo markers (IDs 0-99)
