@@ -48,11 +48,12 @@ class RobotAdapter:
 
     def __init__(self, node, namespace='', base_frame='base_footprint', global_frame='map',
                  lamp_topic='/fleet/lamp', cmd_vel_topic='', callback_group=None,
-                 lamp_service='/set_lamp', emotion_service='/set_emotion'):
+                 lamp_service='/set_lamp', emotion_service='/set_emotion', odom_frame='odom'):
         self.node = node
         ns = namespace.rstrip('/')
         self.global_frame = global_frame
         self.base_frame = base_frame
+        self.odom_frame = odom_frame
         self.lamp = 'OFF'
         self._lamp_sent = None       # last mode the real lamp accepted
         self._emotion_sent = None
@@ -92,6 +93,35 @@ class RobotAdapter:
         self._pose = (t.translation.x, t.translation.y, yaw_from_quaternion(t.rotation))
         self._pose_time = time.monotonic()
         return True
+
+    def odom_pose(self):
+        """(x, y, yaw) of the robot in the odom frame, or None. Smooth, no AMCL jumps:
+        used for the short docking drives."""
+        try:
+            tf = self.tf_buffer.lookup_transform(self.odom_frame, self.base_frame, Time())
+        except TransformException:
+            return None
+        t = tf.transform
+        return t.translation.x, t.translation.y, yaw_from_quaternion(t.rotation)
+
+    def map_to_odom(self, x, y, yaw):
+        """A map-frame pose expressed in the odom frame (None if TF is missing)."""
+        try:
+            tf = self.tf_buffer.lookup_transform(self.odom_frame, self.global_frame, Time())
+        except TransformException:
+            return None
+        t = tf.transform
+        tyaw = yaw_from_quaternion(t.rotation)
+        ox = t.translation.x + x * math.cos(tyaw) - y * math.sin(tyaw)
+        oy = t.translation.y + x * math.sin(tyaw) + y * math.cos(tyaw)
+        return ox, oy, yaw + tyaw
+
+    def drive(self, v, w):
+        """Direct velocity command (docking only; Nav2 is idle then)."""
+        msg = Twist()
+        msg.linear.x = float(v)
+        msg.angular.z = float(w)
+        self.cmd_vel_pub.publish(msg)
 
     @property
     def pose(self):

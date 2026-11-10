@@ -25,4 +25,5 @@ task_manager:
     battery_charged_voltage: 8.0    # "charged" message on the dashboard
     battery_window: 3               # median of the last 3 readings (motor load sag)
     battery_confirm: 2              # readings in a row before the level changes
-    auto_resume_after_charge: false # Pinky charges by cable: the operator unplugs and restarts
+    auto_resume_after_charge: true  # dock with contacts: leave the dock and patrol when charged
+                                    # (false = cable charging: operator unplugs and restarts)

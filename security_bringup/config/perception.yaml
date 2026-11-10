@@ -13,6 +13,8 @@ perception:
     camera_offset_x: 0.035         # m, front_camera_link ahead of base_link (URDF)
     camera_flip: false             # true if the image is upside down
     aruco_dictionary: DICT_4X4_50  # our printed markers (make_markers)
+    dock_marker_id: 0              # marker on the charging dock (never a suspicious object)
+    dock_marker_size: 0.08         # m, measure the printed dock marker
     marker_size: 0.10              # m, black square side. TODO(demo): measure the print
     distance_source: auto          # auto | lidar | marker_size
     lidar_window_deg: 3.0

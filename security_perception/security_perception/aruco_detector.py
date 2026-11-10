@@ -7,6 +7,7 @@ Works with both OpenCV APIs:
 import math
 
 import cv2
+import numpy as np
 
 
 class ArucoDetector:
@@ -82,3 +83,52 @@ def lidar_range_at(scan, angle, window_rad, max_range):
                 best = r if best is None else min(best, r)
         a += abs(scan.angle_increment)
     return best
+
+
+def marker_pose_in_base(corners, marker_size, image_width, image_height,
+                        horizontal_fov_rad, camera_offset_x=0.0):
+    """Marker pose seen from the robot, from its 4 corners (solvePnP).
+
+    Uses a pinhole camera built from the field of view (no calibration file).
+    Returns (x, y, normal_yaw) in the robot base frame:
+        x, y        marker centre, x forward and y left of the base origin
+        normal_yaw  direction the marker face points to (pi when the robot
+                    looks straight at it), only the horizontal part is used
+    or None when solvePnP fails.
+    """
+    fx = focal_length_px(image_width, horizontal_fov_rad)
+    camera = np.array([[fx, 0.0, image_width / 2.0],
+                       [0.0, fx, image_height / 2.0],
+                       [0.0, 0.0, 1.0]])
+    s = marker_size / 2.0
+    object_pts = np.array([[-s, s, 0.0], [s, s, 0.0], [s, -s, 0.0], [-s, -s, 0.0]])
+    image_pts = np.asarray(corners, dtype=np.float64).reshape(4, 2)
+    # A small, almost flat marker has two poses that fit the image (one mirrored).
+    # Take every candidate and keep the best one whose face points at the camera.
+    candidates = []
+    if hasattr(cv2, 'solvePnPGeneric') and hasattr(cv2, 'SOLVEPNP_IPPE_SQUARE'):
+        n, rvecs, tvecs, errs = cv2.solvePnPGeneric(object_pts, image_pts, camera, None,
+                                                   flags=cv2.SOLVEPNP_IPPE_SQUARE)
+        errs = np.asarray(errs).flatten() if errs is not None else [0.0] * n
+        candidates += [(float(e), r, t) for r, t, e in zip(rvecs, tvecs, errs)]
+    ok, rvec, tvec = cv2.solvePnP(object_pts, image_pts, camera, None,
+                                  flags=cv2.SOLVEPNP_ITERATIVE)
+    if ok:
+        proj, _ = cv2.projectPoints(object_pts, rvec, tvec, camera, None)
+        candidates.append((float(np.abs(proj.reshape(4, 2) - image_pts).mean()), rvec, tvec))
+    best = None
+    for err, r, t in sorted(candidates, key=lambda c: c[0]):
+        rm, _ = cv2.Rodrigues(r)
+        if rm[2, 2] < 0 and float(np.asarray(t).flatten()[2]) > 0:   # facing the camera
+            best = (rm, t)
+            break
+    if best is None:
+        return None
+    rot, tvec = best
+    tx, _, tz = tvec.flatten()
+    # camera frame: x right, y down, z forward  ->  base frame: x forward, y left
+    x = camera_offset_x + float(tz)
+    y = -float(tx)
+    normal_cam = rot[:, 2]                     # marker z axis points out of its face
+    normal_yaw = math.atan2(-normal_cam[0], normal_cam[2])
+    return x, y, normal_yaw

@@ -12,6 +12,8 @@ perception:
     camera_offset_x: 0.035
     camera_flip: false
     aruco_dictionary: DICT_4X4_50
+    dock_marker_id: 0
+    dock_marker_size: 0.08
     marker_size: 0.10
     distance_source: auto
     lidar_window_deg: 3.0

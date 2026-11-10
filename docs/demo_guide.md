@@ -44,7 +44,8 @@ A lap takes about one minute.
 | any time | **Acknowledge** on #3 | Alert clears, no more holds for #3 |
 | any time | **EMERGENCY STOP**, then **CLEAR STOP** | All motion stops, then patrol resumes |
 | any time | Simulation panel: battery **Low** | RETURNING: amber lamp, robot drives to the charger, then CHARGING (green) |
-| at the charger | **Plug in**, wait for "Battery charged", **Unplug**, then **Start patrol** | Patrol resumes where it left off |
+| at home | (nothing to do) | Robot docks itself, charges, and backs out to patrol at 8.0 V |
+| any time | **Go home** | Robot docks and stays there until **Start patrol** |
 | during a follow | battery **Low** / **Critical** | Low: finishes the follow first. Critical: stops following and goes to charge |
 
 Commands also work from a terminal:
@@ -150,7 +151,7 @@ The simulator world has no ArUco markers, so this tests patrol, pause, e-stop an
 | 3 | **Test detection** | Dashboard camera panel shows boxes + distance | Distance within ~10 cm at 1 m. Find the max detection distance |
 | 4 | **Camera FOV** | `camera_hfov` in `perception.yaml` | Marker at 1 m, 30 cm to the side: map position within 5 cm. If off, adjust `camera_hfov` |
 | 5 | **Map** | `ros2 launch pinky_navigation map_building.launch.xml` -> teleop -> `map_saver_cli -f <name>` | Map loads in Nav2, AMCL localizes |
-| 6b | **Charger spot** | `config/patrol.yaml` `charger_pose` | A free spot next to a power socket, reachable from the loop. Check battery readings: `ros2 topic echo /battery/voltage` |
+| 6b | **Home dock** | `config/patrol.yaml` `charger_pose`, `dock_docked_distance` | Build the dock, then `ros2 service call /traffic/dock_calibrate std_srvs/srv/Trigger` with the robot on it. See [docking.md](docking.md) |
 | 6 | **Patrol waypoints** | `config/patrol.yaml` `waypoints` | RViz *Publish Point* -> `ros2 topic echo /clicked_point --once`. Pick points where markers will be in view |
 | 7 | **Lamp and LCD** | `pinky_lamp_control`, `pinky_emotion` running on the robot | Patrol: blue breathing. Level 2: red blink + angry face |
 | 8 | **Tune thresholds** with real noise | `config/rules.yaml` | No false MOVING while patrolling. Raise `moving_threshold` if needed |
