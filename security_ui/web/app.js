@@ -166,7 +166,7 @@
   // ------------------------------------------------------------------ events
   const KIND = {
     warning: new Set(['seen_again', 'moving', 'lost_track', 'hold', 'follow_start', 'emergency_stop', 'robot_lost', 'reacquired',
-      'battery_low', 'battery_critical', 'go_charge', 'charger_failed', 'patrol_refused']),
+      'battery_low', 'battery_critical', 'go_charge', 'charger_failed', 'patrol_refused', 'dock_retry']),
     detection: new Set(['detected', 'relocated', 'removed', 'reappeared', 'resighted', 'moving_update', 'reacquired']),
     operator: new Set(['acknowledged', 'cleared', 'paused', 'resumed', 'patrol_stopped', 'emergency_stop', 'charge_ended']),
   };
@@ -339,7 +339,7 @@
       ctx.fill();
       ctx.fillStyle = '#15803D';
       ctx.font = '600 11px Inter, sans-serif';
-      ctx.fillText('charger', cx + 14, cy + 16);
+      ctx.fillText('home dock', cx + 14, cy + 16);
     }
 
     // robot
@@ -479,6 +479,7 @@
     const estop = r && r.task_state === 'EMERGENCY_STOP';
     $('btn-pause').textContent = paused ? 'Resume robot' : 'Pause robot';
     $('btn-unfollow').disabled = !(r && r.task_state === 'FOLLOWING');
+    $('btn-home').disabled = !!(r && ['RETURNING', 'CHARGING'].includes(r.task_state));
     $('estop').textContent = estop ? 'CLEAR STOP' : 'EMERGENCY STOP';
     $('estop').classList.toggle('active', !!estop);
   }
@@ -500,10 +501,12 @@
     let sub = 'OK';
     if (b.mode === 'CHARGING') {
       card.classList.add('charging');
-      sub = b.charged ? 'Charged · unplug, then Start patrol' : 'At the charger · plug in the cable';
+      sub = b.auto_resume
+        ? (b.charged ? 'Docked · charged' : 'Docked · charging')
+        : (b.charged ? 'Charged · unplug, then Start patrol' : 'At the charger · plug in the cable');
     } else if (b.mode === 'RETURNING') {
-      card.classList.add(b.level === 'CRITICAL' ? 'critical' : 'low');
-      sub = 'Low · driving to the charger';
+      if (b.level !== 'OK') card.classList.add(b.level === 'CRITICAL' ? 'critical' : 'low');
+      sub = b.level === 'OK' ? 'Going home' : 'Low · going home to charge';
     } else if (b.level === 'CRITICAL') {
       card.classList.add('critical');
       sub = `Critical (≤ ${b.critical_voltage} V)`;
@@ -689,6 +692,7 @@
   $('btn-start').addEventListener('click', () => trigger('/fleet/start_patrol'));
   $('btn-stop').addEventListener('click', () => trigger('/fleet/stop_patrol'));
   $('btn-unfollow').addEventListener('click', () => trigger('/fleet/stop_follow'));
+  $('btn-home').addEventListener('click', () => trigger('/fleet/go_home'));
   $('btn-pause').addEventListener('click', () => {
     const r = state.robot;
     trigger(r && ['PAUSED', 'EMERGENCY_STOP'].includes(r.task_state) ? '/traffic/resume' : '/traffic/pause');

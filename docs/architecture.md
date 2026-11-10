@@ -41,6 +41,9 @@ Commands flow down (UI -> task manager -> traffic manager -> robot). Status flow
 | `/battery/voltage`, `/battery/percent` | `std_msgs/Float32` | Pinky `battery_publisher` -> task manager |
 | `/fleet/battery` | `std_msgs/String` (JSON) | task manager -> UI (level, voltage, percent) |
 | `/traffic/go_to_charger`, `/traffic/stop` | `std_srvs/Trigger` | task manager -> traffic manager |
+| `/fleet/go_home` | `std_srvs/Trigger` | UI -> task manager |
+| `/traffic/dock_calibrate` | `std_srvs/Trigger` | operator -> traffic manager (robot on the dock) |
+| `/perception/dock` | `PoseStamped` (odom) | perception (or fake_pinky) -> traffic manager |
 | `/traffic/charger` | `PoseStamped` | traffic manager -> UI, RViz |
 | `/fleet/lamp` | `std_msgs/String` OFF/ON/BLINK | traffic manager -> dashboard |
 | `/set_lamp` | `pinky_interfaces/SetLamp` | traffic manager -> `pinky_lamp_control` (robot) |

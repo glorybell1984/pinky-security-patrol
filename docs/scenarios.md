@@ -25,10 +25,12 @@ The step-by-step demo is in [demo_guide.md](demo_guide.md).
 | Lamp `/set_lamp` and LCD `/set_emotion` calls on patrol / hold | ✅ tested (fake servers) | ⬜ |
 | Low battery -> charger -> plug -> charged -> Start patrol resumes | ✅ tested | ⬜ |
 | Low during follow: follow finishes, then charger. Critical during follow: stops at once | ✅ tested | ⬜ |
+| Go home -> staging -> marker docking -> contacts (20 cycles, Nav2 error up to ±15 cm / ±14°) | ✅ 20/20 | ⬜ |
+| Charged on the dock -> backs out -> patrol resumes by itself | ✅ tested | ⬜ |
 | Camera publisher on the robot (pinkylib / picamera2) | — | ⬜ |
 | ArUco detection distance with printed markers (target >= 1.5 m) | — | ⬜ |
 | Map position within 0.2 m of the real position | — | ⬜ |
 | No false MOVING while patrolling past a static box | — | ⬜ |
 | Emergency stop stops the real robot immediately | — | ⬜ |
 
-Unit tests: `cd security_task_manager && python3 -m pytest test` (21 tests).
+Unit tests: `cd security_task_manager && python3 -m pytest test` (21 tests) and `cd security_traffic_manager && python3 -m pytest test` (5 tests).

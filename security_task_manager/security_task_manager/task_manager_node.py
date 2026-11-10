@@ -100,7 +100,7 @@ class TaskManager(Node):
         p('battery_charged_voltage', 8.0)    # ready to patrol again
         p('battery_window', 3)               # median of the last N samples (5 s each)
         p('battery_confirm', 2)              # readings in a row before a level change
-        p('auto_resume_after_charge', False) # True only with a dock (no cable)
+        p('auto_resume_after_charge', True)  # dock with contacts: back to patrol when charged
         g = lambda name: self.get_parameter(name).value  # noqa: E731
 
         self.registry = ObjectRegistry(RegistryConfig(
@@ -143,6 +143,8 @@ class TaskManager(Node):
         self.restart_timer = None
         self.charge_after_follow = False
         self.charge_requested_at = 0.0
+        self.charge_reason = ''
+        self.home_after_follow = False
 
         # ROS interfaces
         self.create_subscription(ObjectDetectionArray, '/perception/detections',
@@ -169,6 +171,8 @@ class TaskManager(Node):
         self.create_service(Trigger, '/fleet/start_patrol', self.on_start_patrol,
                             callback_group=self.cb)
         self.create_service(Trigger, '/fleet/stop_patrol', self.on_stop_patrol,
+                            callback_group=self.cb)
+        self.create_service(Trigger, '/fleet/go_home', self.on_go_home,
                             callback_group=self.cb)
         self.create_service(Trigger, '/fleet/stop_follow', self.on_stop_follow,
                             callback_group=self.cb)
@@ -301,10 +305,14 @@ class TaskManager(Node):
             self.emit({'event': 'battery_recovered',
                        'message': f'Battery voltage up again ({v:.2f} V)'})
         elif name == 'charged':
-            if self.mode == CHARGING and self.auto_resume:
+            if self.mode == CHARGING and self.auto_resume and self.charge_reason != 'operator':
                 self.emit({'event': 'battery_charged',
-                           'message': f'Battery charged ({v:.2f} V): resuming patrol'})
+                           'message': f'Battery charged ({v:.2f} V): leaving the dock, '
+                                      'resuming patrol'})
                 self.start_patrol()
+            elif self.auto_resume:
+                self.emit({'event': 'battery_charged',
+                           'message': f'Battery charged ({v:.2f} V). Press Start patrol.'})
             else:
                 self.emit({'event': 'battery_charged',
                            'message': f'Battery charged ({v:.2f} V). Unplug the cable, '
@@ -315,13 +323,15 @@ class TaskManager(Node):
             if self.mode in (RETURNING, CHARGING):
                 return
             self.mode = RETURNING
+            self.charge_reason = 'operator' if reason == 'operator' else 'battery'
             self.charge_after_follow = False
             for t in (self.hold_timer, self.restart_timer):
                 if t is not None:
                     t.cancel()
             self.hold_timer = self.restart_timer = None
             self.stop_patrol()
-        self.emit({'event': 'go_charge', 'message': f'Going to the charger ({reason})'})
+        self.emit({'event': 'go_charge', 'message': 'Going home (sent by operator)'
+                   if reason == 'operator' else f'Going home to charge ({reason})'})
         self.request_charger()
 
     def request_charger(self):
@@ -493,7 +503,11 @@ class TaskManager(Node):
                 self.mode = PATROLLING
                 self.schedule_restart(1.0)
                 return
-        self.go_charge(f'battery {self.battery.level.lower()}, after follow')
+        if self.home_after_follow:
+            self.home_after_follow = False
+            self.go_charge('operator')
+        else:
+            self.go_charge(f'battery {self.battery.level.lower()}, after follow')
 
     # ================================================================ services
     def on_acknowledge(self, req, res):
@@ -537,6 +551,20 @@ class TaskManager(Node):
         self.emit({'event': 'patrol_stopped', 'message': 'Patrol stopped by operator'})
         res.success = True
         res.message = 'Patrol stopped'
+        return res
+
+    def on_go_home(self, req, res):
+        if self.mode in (RETURNING, CHARGING):
+            res.success, res.message = True, 'Already going home / at home'
+            return res
+        if self.mode == FOLLOWING and self.follow_handle is not None:
+            self.charge_after_follow = True
+            self.home_after_follow = True
+            self.follow_handle.cancel_goal_async()
+            res.success, res.message = True, 'Stopping the follow, then going home'
+            return res
+        self.go_charge('operator')
+        res.success, res.message = True, 'Going home'
         return res
 
     def on_stop_follow(self, req, res):

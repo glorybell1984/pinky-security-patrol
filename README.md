@@ -82,9 +82,10 @@ The full demo steps and the remaining real-robot checklist are in
 | Patrol loop, hold + turn to object, follow, lost track, pause / e-stop | Done, tested on fake Pinky |
 | ArUco perception (camera bearing + LiDAR / marker-size distance) | Done, tested with a synthetic image |
 | Dashboard (map, registry, event log, camera, controls, simulation) | Done |
-| Battery: low / critical -> drive to the charger, wait, operator restarts | Done, 7 unit tests, tested on fake Pinky |
+| Battery: low / critical -> go home, dock, charge, resume | Done, tested on fake Pinky |
+| Home dock: marker-guided precise docking with contacts, Go home | Done, 20/20 dockings on fake Pinky (docs/docking.md), 5 unit tests |
 | Pinky Pro integration: camera publisher, `/set_lamp` lamp, `/set_emotion` LCD, LiDAR frame, URDF offsets | Done, checked against [pinky_pro](https://github.com/pinklab-art/pinky_pro) |
-| Camera orientation, printed markers, map, waypoints, charger spot, threshold tuning | **To do on the robot** |
+| Camera orientation, printed markers, map, waypoints, dock build + calibration, threshold tuning | **To do on the robot** |
 
 ## Battery
 
@@ -94,7 +95,12 @@ Pinky's `battery_publisher` sends `/battery/voltage` every 5 s (2-cell, about 8.
 |---|---|
 | LOW (7.0 V) | No new holds. A running follow is finished first, then the robot drives to `charger_pose` |
 | CRITICAL (6.8 V) | Stops a follow at once and drives to the charger. Start patrol is refused |
-| At the charger | Waits (CHARGING, green lamp) until someone plugs in the cable, the battery reaches 8.0 V, and the operator unplugs it and presses **Start patrol** |
+| At home | Docks on the home dock (ArUco marker ID 0) until the contacts touch, charges (green lamp), and at 8.0 V backs out and resumes patrol by itself |
+
+**Go home** on the dashboard sends the robot home at any time; it then stays docked
+until **Start patrol**. Docking details, dock building and calibration:
+[docs/docking.md](docs/docking.md). For cable charging instead of a dock set
+`dock_enabled: false` (patrol.yaml) and `auto_resume_after_charge: false` (rules.yaml).
 
 Readings are median-filtered and must repeat before the level changes, so voltage
 sag under motor load does not send the robot home. Thresholds are in `config/rules.yaml`,

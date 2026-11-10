@@ -6,8 +6,12 @@ Action servers
 Services
     /traffic/hold_and_signal  HoldAndSignal   lamp signal while the robot holds
     /traffic/pause, /traffic/resume, /traffic/emergency_stop   std_srvs/Trigger
-    /traffic/go_to_charger    std_srvs/Trigger  drive to charger_pose, then wait there
-                              (events: charger_reached, charger_failed)
+    /traffic/go_to_charger    std_srvs/Trigger  go home: Nav2 to a staging point in front of
+                              the dock, then dock precisely on the dock marker
+                              (dock_enabled), or just drive to charger_pose
+                              (events: charger_reached, charger_failed, dock_retry)
+    /traffic/dock_calibrate   std_srvs/Trigger  robot placed on the dock by hand: prints the
+                              docked_distance and charger_pose to put in patrol.yaml
     /traffic/stop             std_srvs/Trigger  end any patrol / follow / charger drive
 Publishes
     /traffic/robot_status   RobotState   5 Hz (pose from TF, motion, lamp, pass)
@@ -16,6 +20,9 @@ Publishes
     /traffic/events         std_msgs/String (JSON)
 Subscribes
     /perception/detections  ObjectDetectionArray  (target positions for follow)
+    /perception/dock        PoseStamped (odom)    dock marker, for docking
+    /battery/voltage        Float32, /batt_state BatteryState   charging contact detection
+    /us_sensor/range        Range (optional)      ultrasonic stop distance at the dock
 """
 import json
 import math
@@ -28,17 +35,24 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from std_msgs.msg import String
+from sensor_msgs.msg import BatteryState, Range
+from std_msgs.msg import Float32, String
 from std_srvs.srv import Trigger
 
 from security_interfaces.action import FollowTarget, Patrol
 from security_interfaces.msg import ObjectDetectionArray, RobotState
 from security_interfaces.srv import HoldAndSignal
 
+from .docking_controller import (ContactDetector, DockConfig, DockEstimate,
+                                 DockingController)
 from .follow_controller import FollowController
 from .health_monitor import HealthMonitor
 from .patrol_executor import PatrolExecutor, parse_waypoints
 from .robot_adapter import RobotAdapter
+
+
+def wrap_angle(a):
+    return math.atan2(math.sin(a), math.cos(a))
 
 
 class TrafficManager(Node):
@@ -64,15 +78,34 @@ class TrafficManager(Node):
         p('follow_update_period', 0.5)
         p('follow_min_distance', 0.5)
         p('follow_replan_distance', 0.2)
-        p('charger_pose', [0.0, 0.0, 0.0])     # x, y, yaw_deg in the map frame
+        p('charger_pose', [0.0, 0.0, 0.0])     # robot pose when docked: x, y, yaw_deg (map)
         p('charger_retries', 3)
+        # --- dock with charging contacts (docs/docking.md)
+        p('dock_enabled', True)                 # False: just drive to charger_pose
+        p('odom_frame', 'odom')
+        p('dock_staging_distance', 0.6)         # m in front of the docked pose
+        p('dock_docked_distance', 0.15)         # m marker -> base when docked (calibrate)
+        p('dock_approach_speed', 0.08)
+        p('dock_min_speed', 0.02)
+        p('dock_lateral_tolerance', 0.015)
+        p('dock_heading_tolerance_deg', 6.0)
+        p('dock_retries', 2)
+        p('dock_contact_detect', True)          # wait for a battery voltage rise
+        p('dock_contact_rise', 0.12)            # V
+        p('dock_contact_timeout', 12.0)         # s (Pinky's battery topic is every 5 s)
+        p('dock_undock_distance', 0.35)
+        p('dock_us_stop_range', 0.0)            # m, ultrasonic stop, 0 = off
+        p('battery_voltage_topic', '/battery/voltage')
+        p('batt_state_topic', '/batt_state')    # pinky_sensor_adc, '' to ignore
+        p('us_topic', '/us_sensor/range')
+        p('start_docked', False)                # robot starts on the dock
         g = lambda name: self.get_parameter(name).value  # noqa: E731
 
         self.robot_id = g('robot_id')
         self.waypoints = parse_waypoints(list(g('waypoints')))
         self.adapter = RobotAdapter(self, g('namespace'), g('base_frame'), g('global_frame'),
                                     g('lamp_topic'), g('cmd_vel_topic'), self.cb,
-                                    g('lamp_service'), g('emotion_service'))
+                                    g('lamp_service'), g('emotion_service'), g('odom_frame'))
         self.patrol = PatrolExecutor(self.adapter, self.waypoints, self.emit,
                                      g('nav_retry'), g('waypoint_pause'))
         self.follow = FollowController(self.adapter, self.get_detection, self.emit,
@@ -82,6 +115,26 @@ class TrafficManager(Node):
         cp = list(g('charger_pose'))
         self.charger_pose = (float(cp[0]), float(cp[1]), math.radians(float(cp[2])))
         self.charger_retries = int(g('charger_retries'))
+        self.dock_enabled = g('dock_enabled')
+        self.staging_distance = g('dock_staging_distance')
+        self.dock_cfg = DockConfig(
+            docked_distance=g('dock_docked_distance'),
+            approach_speed=g('dock_approach_speed'),
+            min_speed=g('dock_min_speed'),
+            lateral_tolerance=g('dock_lateral_tolerance'),
+            heading_tolerance=math.radians(g('dock_heading_tolerance_deg')),
+            retries=g('dock_retries'),
+            contact_timeout=g('dock_contact_timeout'),
+            undock_distance=g('dock_undock_distance'),
+            us_stop_range=g('dock_us_stop_range'),
+        )
+        self.dock_est = DockEstimate()
+        self.contact = ContactDetector(g('dock_contact_rise'))
+        self.us_range = None
+        self.docker = DockingController(self.adapter, self.dock_est, self.contact, self.emit,
+                                        self.dock_cfg, self.get_us_range,
+                                        g('dock_contact_detect'))
+        self.docked = bool(g('start_docked'))
 
         # state
         self.active_token = 0          # increments on each new action; old loops exit
@@ -99,6 +152,17 @@ class TrafficManager(Node):
         self.charger_pub = self.create_publisher(PoseStamped, '/traffic/charger', 10)
         self.create_subscription(ObjectDetectionArray, '/perception/detections',
                                  self.on_detections, 10, callback_group=self.cb)
+        self.create_subscription(PoseStamped, '/perception/dock', self.on_dock_marker, 10,
+                                 callback_group=self.cb)
+        self.create_subscription(Float32, g('battery_voltage_topic'),
+                                 lambda m: self.contact.add_voltage(m.data), 10,
+                                 callback_group=self.cb)
+        if g('batt_state_topic'):
+            self.create_subscription(BatteryState, g('batt_state_topic'), self.on_batt_state,
+                                     10, callback_group=self.cb)
+        if g('us_topic'):
+            self.create_subscription(Range, g('us_topic'), self.on_us, 10,
+                                     callback_group=self.cb)
 
         ActionServer(self, Patrol, '/traffic/patrol', self.execute_patrol,
                      goal_callback=lambda _: GoalResponse.ACCEPT,
@@ -117,6 +181,8 @@ class TrafficManager(Node):
         self.create_service(Trigger, '/traffic/go_to_charger', self.on_go_to_charger,
                             callback_group=self.cb)
         self.create_service(Trigger, '/traffic/stop', self.on_stop, callback_group=self.cb)
+        self.create_service(Trigger, '/traffic/dock_calibrate', self.on_dock_calibrate,
+                            callback_group=self.cb)
 
         self.create_timer(0.2, self.publish_status, callback_group=self.cb)
         self.create_timer(1.0, self.publish_waypoints, callback_group=self.cb)
@@ -147,6 +213,42 @@ class TrafficManager(Node):
             p = det.position_map.point
             self.detections[det.marker_id] = (p.x, p.y, now)
 
+    def on_dock_marker(self, msg):
+        q = msg.pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        x, y = msg.pose.position.x, msg.pose.position.y
+        p = self.adapter.odom_pose()
+        dist = math.hypot(x - p[0], y - p[1]) if p else 1.0
+        self.dock_est.update(x, y, yaw, dist)
+
+    def on_batt_state(self, msg):
+        if msg.voltage > 0.5:
+            self.contact.add_voltage(msg.voltage)
+        self.contact.add_status_charging(
+            msg.power_supply_status == BatteryState.POWER_SUPPLY_STATUS_CHARGING)
+
+    def on_us(self, msg):
+        self.us_range = (msg.range, time.monotonic())
+
+    def get_us_range(self):
+        if self.us_range is None or time.monotonic() - self.us_range[1] > 0.5:
+            return None
+        return self.us_range[0]
+
+    def leave_dock(self, should_stop):
+        """Back out of the dock before any other motion."""
+        if not self.dock_enabled:
+            self.docked = False
+            return True
+        if not (self.docked or self.docker.at_dock()):
+            return True
+        self.emit({'event': 'undocking', 'message': 'Leaving the dock'})
+        ok = self.docker.undock(should_stop, self.is_paused)
+        if ok:
+            self.docked = False
+            self.emit({'event': 'undocked', 'message': 'Left the dock'})
+        return ok
+
     def get_detection(self, marker_id):
         d = self.detections.get(marker_id)
         if d is None:
@@ -166,7 +268,10 @@ class TrafficManager(Node):
             fb = Patrol.Feedback(patrol_pass=patrol_pass, waypoint_index=index)
             goal_handle.publish_feedback(fb)
 
-        reason = self.patrol.run(should_stop, self.is_paused, on_progress)
+        if not self.leave_dock(should_stop):
+            reason = 'preempted'
+        else:
+            reason = self.patrol.run(should_stop, self.is_paused, on_progress)
         if self.active_token == token:
             self.activity = 'STOPPED'
         result = Patrol.Result(reason=reason)
@@ -194,6 +299,7 @@ class TrafficManager(Node):
         def on_feedback(dist):
             goal_handle.publish_feedback(FollowTarget.Feedback(distance_to_target=float(dist)))
 
+        self.leave_dock(should_stop)
         reason, lx, ly = self.follow.run(goal.marker_id, goal.follow_distance or 0.7,
                                          goal.lost_timeout or 5.0, should_stop,
                                          self.is_paused, on_feedback)
@@ -237,37 +343,95 @@ class TrafficManager(Node):
 
     def run_to_charger(self, token):
         x, y, yaw = self.charger_pose
-        self.emit({'event': 'returning_to_charger',
-                   'message': f'Driving to the charger at ({x:.2f}, {y:.2f})'})
 
         def should_stop():
             return self.active_token != token
+
+        if self.docked and self.dock_enabled:
+            self.activity = 'CHARGING'
+            self.emit({'event': 'charger_reached', 'message': 'Already on the dock'})
+            return
+        if self.dock_enabled:
+            # staging point: in front of the dock, facing it
+            sx = x - self.staging_distance * math.cos(yaw)
+            sy = y - self.staging_distance * math.sin(yaw)
+            self.emit({'event': 'returning_to_charger',
+                       'message': f'Going home: staging point ({sx:.2f}, {sy:.2f}), then docking'})
+        else:
+            sx, sy = x, y
+            self.emit({'event': 'returning_to_charger',
+                       'message': f'Driving to the charger at ({x:.2f}, {y:.2f})'})
 
         attempt = 0
         while not should_stop():
             if self.is_paused():
                 time.sleep(0.2)
                 continue
-            result = self.adapter.navigate(x, y, yaw, should_abort=should_stop)
-            if result == 'succeeded':
-                self.adapter.stop()
-                self.activity = 'CHARGING'
-                self.emit({'event': 'charger_reached',
-                           'message': 'At the charger. Plug in the charging cable.'})
-                return
+            result = self.adapter.navigate(sx, sy, yaw, should_abort=should_stop)
             if result == 'aborted':
                 if should_stop():
                     return
                 continue       # cancelled by a pause or e-stop: try again after it
+            if result == 'succeeded':
+                self.adapter.stop()
+                if not self.dock_enabled:
+                    self.activity = 'CHARGING'
+                    self.emit({'event': 'charger_reached',
+                               'message': 'At the charger. Plug in the charging cable.'})
+                    return
+                outcome = self.dock_here(should_stop)
+                if outcome == 'docked':
+                    return
+                if outcome == 'aborted':
+                    if should_stop():
+                        return
+                    continue
+                result = outcome
             attempt += 1
             if attempt > self.charger_retries:
                 if self.active_token == token:
                     self.activity = 'STOPPED'
                 self.emit({'event': 'charger_failed',
-                           'message': f'Could not reach the charger ({result}). '
-                                      'Drive the robot there by hand.'})
+                           'message': f'Could not dock ({result}). Put the robot on the dock '
+                                      'by hand.'})
                 return
+            self.emit({'event': 'dock_retry',
+                       'message': f'{result}: driving to the staging point again'})
             time.sleep(1.0)
+
+    def dock_here(self, should_stop):
+        """At the staging point: precise docking on the dock marker."""
+        x, y, yaw = self.charger_pose
+        dock_yaw_map = yaw + math.pi                      # dock face points back at the robot
+        mx = x + self.dock_cfg.docked_distance * math.cos(yaw)
+        my = y + self.dock_cfg.docked_distance * math.sin(yaw)
+        prior = self.adapter.map_to_odom(mx, my, dock_yaw_map)
+        self.dock_est.reset()
+        if prior is not None:
+            self.dock_est.seed(*prior)      # angle prior from the map until the marker is close
+        self.emit({'event': 'docking', 'message': 'Docking on the dock marker'})
+        outcome = self.docker.dock(should_stop, self.is_paused)
+        if outcome == 'docked':
+            self.docked = True
+            self.activity = 'CHARGING'
+            self.emit({'event': 'charger_reached', 'message': 'Docked: charging contacts on'})
+        return outcome
+
+    def on_dock_calibrate(self, req, res):
+        p = self.adapter.odom_pose()
+        if p is None or not self.dock_est.fresh(1.0):
+            res.success = False
+            res.message = 'Dock marker not visible (or no odom TF). Is perception running?'
+            return res
+        dx, dy, heading = self.dock_est.robot_in_dock(*p)
+        mx, my, myaw = self.adapter.pose
+        res.success = True
+        res.message = (f'dock_docked_distance: {dx:.3f}  (sideways {dy * 100:+.1f} cm, '
+                       f'heading {math.degrees(wrap_angle(heading - math.pi)):+.1f} deg)   '
+                       f'charger_pose: [{mx:.2f}, {my:.2f}, {math.degrees(myaw):.1f}]')
+        self.docked = True
+        self.emit({'event': 'dock_calibrated', 'message': res.message})
+        return res
 
     def on_stop(self, req, res):
         self.new_token()

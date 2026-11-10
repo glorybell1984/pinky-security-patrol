@@ -9,6 +9,9 @@ Replaces Nav2, localization, the map server and perception:
     /fake_pinky/markers     MarkerArray (ground truth, for RViz)
     /fake_pinky/status      std_msgs/String JSON (objects and robot, for the dashboard)
     /battery/voltage, /battery/percent   Float32, like Pinky's battery_publisher
+    /perception/dock        PoseStamped (odom) dock marker as perception would see it
+                            (noise grows with distance); the dock body is solid and the
+                            contacts only connect when the robot arrives lined up
     /set_lamp, /set_emotion fake pinky_lamp_control / pinky_emotion servers
                             (only when the pinky_pro workspace is sourced)
 
@@ -31,7 +34,7 @@ import threading
 import time
 
 import rclpy
-from geometry_msgs.msg import PointStamped, TransformStamped, Twist
+from geometry_msgs.msg import PointStamped, PoseStamped, TransformStamped, Twist
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
@@ -97,6 +100,12 @@ class FakePinky(Node):
         p('battery_drain_idle', 0.0002)              # V/s standing still
         p('battery_charge_rate', 0.02)               # V/s with the cable plugged in
         p('battery_period', 2.0)                     # s between readings (Pinky: 5 s)
+        p('dock_enabled', True)
+        p('dock_pose', [0.5, 2.0, 180.0])            # robot pose when docked (x, y, yaw_deg)
+        p('dock_docked_distance', 0.15)              # marker -> robot base when docked
+        p('dock_contact_tolerance', [0.012, 0.015, 5.0])  # along, sideways (m), yaw (deg)
+        p('dock_marker_rate', 10.0)
+        p('nav_goal_noise', [0.05, 6.0])             # Nav2-like stop error: m, deg
         p('scenario', [''])                          # ["<seconds> <command>", ...]
         g = lambda name: self.get_parameter(name).value  # noqa: E731
 
@@ -161,7 +170,22 @@ class FakePinky(Node):
         self.drain_idle = g('battery_drain_idle')
         self.charge_rate = g('battery_charge_rate')
         self.plugged = False
+        self.plugged_by = ''                         # 'cable' or 'dock'
         self.moving = False
+        self.dock_enabled = g('dock_enabled')
+        dp = list(g('dock_pose'))
+        self.dock_dd = g('dock_docked_distance')
+        dyaw = math.radians(dp[2])
+        # marker sits docked_distance ahead of the docked robot, its face pointing back
+        self.dock_mx = dp[0] + self.dock_dd * math.cos(dyaw)
+        self.dock_my = dp[1] + self.dock_dd * math.sin(dyaw)
+        self.dock_myaw = wrap(dyaw + math.pi)
+        self.dock_tol = list(g('dock_contact_tolerance'))
+        self.nav_noise = list(g('nav_goal_noise'))
+        self.dock_pub = self.create_publisher(PoseStamped, '/perception/dock', 10)
+        if self.dock_enabled:
+            self.create_timer(1.0 / g('dock_marker_rate'), self.publish_dock,
+                              callback_group=self.cb)
         self.last_xy = (self.x, self.y)
         self.create_timer(g('battery_period'), self.publish_battery, callback_group=self.cb)
         self.create_subscription(Twist, f'{ns}/cmd_vel', self.on_cmd_vel, 10)
@@ -240,9 +264,9 @@ class FakePinky(Node):
                 elif cmd == 'battery' and args:
                     self.battery = float(args[0])
                 elif cmd == 'plug':
-                    self.plugged = True
+                    self.plugged, self.plugged_by = True, 'cable'
                 elif cmd == 'unplug':
-                    self.plugged = False
+                    self.plugged, self.plugged_by = False, ''
                 else:
                     self.get_logger().warn(f'Unknown or invalid command: {msg.data}')
                     return
@@ -307,9 +331,17 @@ class FakePinky(Node):
         moved = math.hypot(self.x - self.last_xy[0], self.y - self.last_xy[1])
         self.last_xy = (self.x, self.y)
         self.moving = moved > 0.002 or self.navigating()
+        if self.dock_enabled:
+            on_dock = self.contacts_touch()
+            if on_dock and not self.plugged:
+                self.plugged, self.plugged_by = True, 'dock'
+                self.get_logger().info('[dock] contacts touching: charging')
+            elif not on_dock and self.plugged_by == 'dock':
+                self.plugged, self.plugged_by = False, ''
+                self.get_logger().info('[dock] left the contacts')
         if self.plugged:
-            if moved > 0.01:
-                self.plugged = False
+            if moved > 0.01 and self.plugged_by == 'cable':
+                self.plugged, self.plugged_by = False, ''
                 self.get_logger().error('Robot drove off with the charging cable plugged in! '
                                         '(cable pulled out)')
             self.battery = min(8.4, self.battery + self.charge_rate * dt)
@@ -338,9 +370,42 @@ class FakePinky(Node):
     def navigating(self):
         return getattr(self, '_navigating', False)
 
+    def in_dock_frame(self, x, y, yaw=0.0):
+        dx, dy = x - self.dock_mx, y - self.dock_my
+        c, s = math.cos(self.dock_myaw), math.sin(self.dock_myaw)
+        return dx * c + dy * s, -dx * s + dy * c, wrap(yaw - self.dock_myaw)
+
+    def contacts_touch(self):
+        rx, ry, h = self.in_dock_frame(self.x, self.y, self.yaw)
+        return (abs(rx - self.dock_dd) <= self.dock_tol[0] and abs(ry) <= self.dock_tol[1]
+                and abs(wrap(h - math.pi)) <= math.radians(self.dock_tol[2]))
+
+    def publish_dock(self):
+        """What perception would publish: marker pose in odom (= map here) with noise."""
+        dx, dy = self.dock_mx - self.x, self.dock_my - self.y
+        dist = math.hypot(dx, dy)
+        bearing = wrap(math.atan2(dy, dx) - self.yaw)
+        # marker face must point towards the camera (within 60 deg)
+        facing = abs(wrap(self.dock_myaw - math.atan2(-dy, -dx)))
+        if not (0.06 < dist < 1.5) or abs(bearing) > self.hfov / 2 - 0.05 or facing > 1.05:
+            return
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'odom'
+        # lateral noise is tiny, range a bit more, angle noisy far away (see docs/docking.md)
+        msg.pose.position.x = self.dock_mx + random.gauss(0, 0.002 + 0.004 * dist)
+        msg.pose.position.y = self.dock_my + random.gauss(0, 0.002 + 0.004 * dist)
+        yaw = self.dock_myaw + random.gauss(0, math.radians(0.5 + 20 * dist * dist))
+        msg.pose.orientation.z, msg.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+        self.dock_pub.publish(msg)
+
     def blocked(self, x, y):
         if x < 0.2 or y < 0.2 or x > self.map_w - 0.2 or y > self.map_h - 0.2:
             return True
+        if self.dock_enabled:          # the dock body: 20 cm wide, robot front stops at it
+            rx, ry, _ = self.in_dock_frame(x, y)
+            if -0.05 < rx < self.dock_dd - 0.004 and abs(ry) < 0.10:
+                return True
         for x0, y0, x1, y1 in self.boxes:
             if x0 - 0.12 <= x <= x1 + 0.12 and y0 - 0.12 <= y <= y1 + 0.12:
                 return True
@@ -370,6 +435,11 @@ class FakePinky(Node):
         gx, gy = pose.position.x, pose.position.y
         gyaw = math.atan2(2.0 * pose.orientation.w * pose.orientation.z,
                           1.0 - 2.0 * pose.orientation.z * pose.orientation.z)
+        # real Nav2 stops within its goal tolerance, not exactly on the goal
+        if self.nav_noise[0] > 0:
+            gx += random.uniform(-1, 1) * self.nav_noise[0]
+            gy += random.uniform(-1, 1) * self.nav_noise[0]
+            gyaw += math.radians(random.uniform(-1, 1) * self.nav_noise[1])
         result = NavigateToPose.Result()
         period = 0.05
         stuck_since = None
@@ -450,7 +520,8 @@ class FakePinky(Node):
         arr.markers.append(clear)
         status = {'robot': {'x': round(self.x, 3), 'y': round(self.y, 3),
                             'yaw': round(self.yaw, 3), 'lamp': self.lamp},
-                  'battery': {'voltage': round(self.battery, 2), 'plugged': self.plugged},
+                  'battery': {'voltage': round(self.battery, 2), 'plugged': self.plugged,
+                              'plugged_by': self.plugged_by},
                   'objects': []}
         with self.lock:
             for obj in self.objects.values():

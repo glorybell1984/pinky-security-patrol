@@ -11,6 +11,9 @@ Publishes
                                             also when empty; the task manager needs that
                                             to decide that an object is gone)
     /perception/debug_image/compressed      CompressedImage with boxes (for the dashboard)
+    /perception/dock                        PoseStamped (odom frame): the charging dock's
+                                            marker, position + the direction its face points.
+                                            Never reported as a suspicious object.
 """
 import math
 import time
@@ -18,7 +21,7 @@ import time
 import cv2
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, PoseStamped
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -29,7 +32,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from security_interfaces.msg import ObjectDetection, ObjectDetectionArray
 
 from .aruco_detector import (ArucoDetector, bearing_from_pixel,
-                             distance_from_marker_size, lidar_range_at)
+                             distance_from_marker_size, lidar_range_at, marker_pose_in_base)
 
 
 def yaw_from_quaternion(q):
@@ -57,6 +60,9 @@ class Perception(Node):
         p('lidar_yaw_from_tf', True)       # read it from TF; Pinky's rplidar_link is turned 180 deg
         p('max_detect_distance', 2.5)
         p('process_rate', 10.0)            # Hz, frames per second to process
+        p('dock_marker_id', 0)             # marker on the charging dock, -1 = no dock
+        p('dock_marker_size', 0.08)        # m, black square side of the dock marker
+        p('odom_frame', 'odom')
         p('debug_image', True)
         p('debug_rate', 5.0)
         g = lambda name: self.get_parameter(name).value  # noqa: E731
@@ -73,6 +79,9 @@ class Perception(Node):
         self.lidar_yaw_from_tf = g('lidar_yaw_from_tf')
         self.max_dist = g('max_detect_distance')
         self.min_period = 1.0 / max(g('process_rate'), 0.1)
+        self.dock_id = g('dock_marker_id')
+        self.dock_size = g('dock_marker_size')
+        self.odom_frame = g('odom_frame')
         self.debug_enabled = g('debug_image')
         self.debug_period = 1.0 / max(g('debug_rate'), 0.1)
 
@@ -93,6 +102,7 @@ class Perception(Node):
         self.create_subscription(LaserScan, g('scan_topic'), self.on_scan,
                                  qos_profile_sensor_data)
         self.det_pub = self.create_publisher(ObjectDetectionArray, '/perception/detections', 10)
+        self.dock_pub = self.create_publisher(PoseStamped, '/perception/dock', 10)
         self.debug_pub = self.create_publisher(CompressedImage,
                                                '/perception/debug_image/compressed', 5)
         self.get_logger().info(
@@ -189,6 +199,9 @@ class Perception(Node):
         labels = []
 
         for m in markers:
+            if m['marker_id'] == self.dock_id:
+                labels.append((m, self.publish_dock(m, w, h, header)))
+                continue
             bearing = bearing_from_pixel(m['center_x'], w, self.hfov)
             dist, source = self.estimate_distance(m, bearing, w)
             if dist is None or dist > self.max_dist or tf is None:
@@ -214,6 +227,34 @@ class Perception(Node):
 
         self.det_pub.publish(out)
         self.publish_debug(frame, labels, header)
+
+    def publish_dock(self, marker, w, h, header):
+        """Dock marker pose -> odom frame (stable over the short docking drive)."""
+        est = marker_pose_in_base(marker['corners'], self.dock_size, w, h, self.hfov,
+                                  self.cam_offset)
+        if est is None:
+            return 'DOCK ?'
+        x, y, nyaw = est
+        try:
+            tf = self.tf_buffer.lookup_transform(self.odom_frame, self.base_frame,
+                                                 Time.from_msg(header.stamp),
+                                                 timeout=Duration(seconds=0.05))
+        except TransformException:
+            try:
+                tf = self.tf_buffer.lookup_transform(self.odom_frame, self.base_frame, Time())
+            except TransformException:
+                return 'DOCK (no odom TF)'
+        t = tf.transform
+        ryaw = yaw_from_quaternion(t.rotation)
+        msg = PoseStamped()
+        msg.header.stamp = header.stamp
+        msg.header.frame_id = self.odom_frame
+        msg.pose.position.x = t.translation.x + x * math.cos(ryaw) - y * math.sin(ryaw)
+        msg.pose.position.y = t.translation.y + x * math.sin(ryaw) + y * math.cos(ryaw)
+        yaw = ryaw + nyaw
+        msg.pose.orientation.z, msg.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+        self.dock_pub.publish(msg)
+        return f'DOCK {math.hypot(x, y):.2f} m'
 
     def publish_debug(self, frame, labels, header):
         if not self.debug_enabled:
