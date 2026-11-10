@@ -40,7 +40,8 @@ traffic_manager:
     # the dock by hand, then  ros2 service call /traffic/dock_calibrate std_srvs/srv/Trigger
     # and copy dock_docked_distance and charger_pose from the answer.
     dock_enabled: true
-    dock_docked_distance: 0.14       # marker on the dock front (x -0.13) -> robot centre (x 0.01)
+    dock_docked_distance: 0.05       # measured: front 1 cm from marker 66 + axle->front 3.9 cm
+                                     # (the map shows the clear dock box 10 cm deeper: LiDAR sees through it)
     dock_staging_distance: 0.6       # Nav2 stops this far in front of the dock
     dock_approach_speed: 0.08        # m/s on the dock line
     dock_min_speed: 0.02
