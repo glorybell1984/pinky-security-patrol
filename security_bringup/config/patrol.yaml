@@ -3,8 +3,9 @@
 # written with a decimal point (0.0, not 0) or ROS rejects the list type.
 #
 # Map: maps/police_map.yaml (arena about x -0.2 .. 1.5, y -0.1 .. 4.0).
-# TODO(demo): the waypoints and charger_pose below are from an OLD map and lie
-# outside police_map. Pick new ones inside the arena:
+# Waypoints and charger_pose: DRAFT from the map's free space, the same layout
+# rehearsed on Fake Pinky (fake_robot.launch.xml world:=police). Check them on
+# the robot and move them if needed:
 #   RViz -> Publish Point -> click -> ros2 topic echo /clicked_point --once
 traffic_manager:
   ros__parameters:
@@ -16,10 +17,13 @@ traffic_manager:
     lamp_service: /set_lamp        # pinky_lamp_control on the robot, "" to disable
     emotion_service: /set_emotion  # pinky_emotion LCD faces, "" to disable
     cmd_vel_topic: ""              # default: <namespace>/cmd_vel
-    waypoints: [0.15, -3.61, 0.0,
-                0.94, -3.38, 90.0,
-                0.94, -2.40, 180.0,
-                0.15, -2.40, -90.0]
+    # The arena is one corridor (x 0.7-1.2) with open ends: out and back.
+    waypoints: [0.50, 0.45, 0.0,       # WP1 bottom, near the dock
+                1.00, 1.50, 90.0,      # WP2 up the corridor
+                1.05, 3.30, 90.0,      # WP3 top end (draft place of object 42, 0.4 m ahead)
+                0.60, 3.35, 180.0,     # WP4 top left
+                1.00, 2.20, -90.0,     # WP5 back down
+                0.95, 0.80, -90.0]     # WP6
     nav_retry: 1
     waypoint_pause: 1.0            # s, look around a moment at each waypoint
     pose_timeout: 3.0
@@ -29,7 +33,7 @@ traffic_manager:
     # Where the robot waits to be charged (x, y, yaw_deg in the map frame). Pick a
     # free spot next to a power socket; the robot drives there on low battery.
     # TODO(demo): set from RViz Publish Point, like the waypoints.
-    charger_pose: [0.15, -3.61, 0.0]   # robot pose WHEN DOCKED, facing the dock
+    charger_pose: [0.15, 0.10, -90.0]  # DRAFT: robot pose WHEN DOCKED, facing the bottom wall
     charger_retries: 3
 
     # Dock with charging contacts (docs/docking.md). Calibrate: put the robot on
