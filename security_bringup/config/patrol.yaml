@@ -2,7 +2,9 @@
 # Waypoints are flat x, y, yaw_deg triples in the map frame. All values must be
 # written with a decimal point (0.0, not 0) or ROS rejects the list type.
 #
-# TODO(demo): replace with points from your own map:
+# Map: maps/police_map.yaml (arena about x -0.2 .. 1.5, y -0.1 .. 4.0).
+# TODO(demo): the waypoints and charger_pose below are from an OLD map and lie
+# outside police_map. Pick new ones inside the arena:
 #   RViz -> Publish Point -> click -> ros2 topic echo /clicked_point --once
 traffic_manager:
   ros__parameters:

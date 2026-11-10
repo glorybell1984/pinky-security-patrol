@@ -5,7 +5,7 @@
           ros2 run pinky_lamp_control main_node
           ros2 run pinky_emotion emotion_server        (optional, LCD faces)
           python3 camera_publisher.py
-  Laptop: ros2 launch pinky_navigation bringup_launch.xml map:=<map>.yaml
+  Laptop: ros2 launch pinky_navigation bringup_launch.xml map:=<path>/police_map.yaml   (security_bringup/maps)
           ros2 launch pinky_navigation nav2_view.launch.xml   (2D Pose Estimate)
           ros2 launch security_bringup patrol_system.launch.xml
 
