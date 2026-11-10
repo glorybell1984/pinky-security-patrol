@@ -20,7 +20,7 @@ to a staging point, and the docking controller does the last 0.5 m.
 | Step | What happens |
 |---|---|
 | Staging | Nav2 goal 0.6 m in front of the docked pose, facing the dock |
-| Acquire | Wait for the dock marker (ID 0). If not seen, turn slowly ±35° to find it |
+| Acquire | Wait for the dock marker (ID 66). If not seen, turn slowly ±35° to find it |
 | Approach | Follow the dock's centre line: aim at a point 20 cm ahead on the line (pure pursuit), slow down near the end, acceleration limited |
 | Contact | Stop at the docked distance. Wait for the battery voltage to rise (charger on). Push 1 cm once if needed |
 | Retry | No contact, marker lost, or not lined up in the last 8 cm: back off 30 cm and try again (2 retries), then Nav2 to staging again (3 times) |
@@ -137,7 +137,7 @@ Build the dock so it forgives about **±2 cm and ±5°**.
 
 | Part | Advice |
 |---|---|
-| Marker | ID 0, DICT_4X4_50: `ros2 run security_perception make_markers --ids 0 --out ~/markers`. Print so the black square is 6-8 cm, set `dock_marker_size` |
+| Marker | ID 66, DICT_5X5_100: `ros2 run security_perception make_markers --ids 66 --out ~/markers`. The demo print is 4 cm; 6-8 cm gives a steadier angle and a longer range. Set `dock_marker_size` to the black square side |
 | Marker place | On the dock face, centred, at camera height. It must still be fully visible when docked (marker about 15 cm in front of the camera) |
 | Contacts | Wide pads on the dock (3-4 cm), spring contacts on the robot. Polarity: make it impossible to touch + to - (e.g. pads at different heights) |
 | Guides | A V-shaped funnel in front of the contacts pushes the last 1-2 cm of error into place |

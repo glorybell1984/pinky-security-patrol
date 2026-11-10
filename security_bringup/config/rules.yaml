@@ -10,7 +10,10 @@ task_manager:
     min_revisit_time: 20.0        # s between pass sightings before level 2
     moving_gap: 10.0              # s; found elsewhere this soon after a sighting = moving
     removed_frames: 15            # in-view frames without detection -> REMOVED
-    view_distance: 2.0            # m
+    view_distance: 0.5            # m, REMOVED is only judged this close: the 2.7 cm
+                                  # object marker is not readable much farther (synthetic
+                                  # test: 100 % up to 0.5 m, 40-65 % at 0.7-1.0 m).
+                                  # With a 10 cm marker use 1.5. Fake Pinky: 2.0 (launch)
     camera_hfov: 1.085            # rad, must match the perception setting
     follow_distance: 0.7          # m
     lost_timeout: 5.0             # s

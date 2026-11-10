@@ -20,6 +20,7 @@
 
   <node pkg="security_task_manager" exec="task_manager" output="screen">
     <param from="$(var config_dir)/rules.yaml"/>
+    <param name="view_distance" value="2.0"/>   <!-- fake camera sees 2.2 m -->
   </node>
 
   <include if="$(var rosbridge)"

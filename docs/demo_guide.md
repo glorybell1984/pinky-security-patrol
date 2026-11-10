@@ -147,8 +147,8 @@ The simulator world has no ArUco markers, so this tests patrol, pause, e-stop an
 | # | Task | Where | How to check |
 |---|---|---|---|
 | 1 | **Camera publisher** on the robot | `camera_publisher.py` params `rotate`, `swap_rb` | Dashboard camera panel: upright image, correct colors, ~15 Hz |
-| 2 | **Print ArUco markers** (DICT_4X4_50) | `ros2 run security_perception make_markers --ids 3 5 7` | Black square = `marker_size` (default 10 cm). Measure it. (The class pinkylib markers are a different set; use ours) |
-| 3 | **Test detection** | Dashboard camera panel shows boxes + distance | Distance within ~10 cm at 1 m. Find the max detection distance |
+| 2 | **ArUco markers** (DICT_5X5_100): done. 66 = dock (4 cm), 42 = object (2.7 cm) | `perception.yaml`: `aruco_dictionary`, `dock_marker_id`, `marker_size`, `dock_marker_size` | Black square sizes match the prints. Small markers: check the detection range (step 3) |
+| 3 | **Test detection** | Dashboard camera panel shows boxes + distance | Find the max detection distance. Synthetic images (640x480, 66° FOV) give: 42 (2.7 cm) reliable to ~0.5 m, 66 (4 cm) to ~1.2 m. Set `view_distance` (rules.yaml) and `max_detect_distance` (perception.yaml) to what the real camera reaches. Patrol waypoints must pass the object within that distance, facing it |
 | 4 | **Camera FOV** | `camera_hfov` in `perception.yaml` | Marker at 1 m, 30 cm to the side: map position within 5 cm. If off, adjust `camera_hfov` |
 | 5 | **Map** | `ros2 launch pinky_navigation map_building.launch.xml` -> teleop -> `map_saver_cli -f <name>` | Map loads in Nav2, AMCL localizes |
 | 6b | **Home dock** | `config/patrol.yaml` `charger_pose`, `dock_docked_distance` | Build the dock, then `ros2 service call /traffic/dock_calibrate std_srvs/srv/Trigger` with the robot on it. See [docking.md](docking.md) |

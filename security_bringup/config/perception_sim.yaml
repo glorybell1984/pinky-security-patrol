@@ -11,10 +11,10 @@ perception:
     camera_hfov: 1.1519
     camera_offset_x: 0.035
     camera_flip: false
-    aruco_dictionary: DICT_4X4_50
-    dock_marker_id: 0
-    dock_marker_size: 0.08
-    marker_size: 0.10
+    aruco_dictionary: DICT_5X5_100
+    dock_marker_id: 66
+    dock_marker_size: 0.04
+    marker_size: 0.027
     distance_source: auto
     lidar_window_deg: 3.0
     lidar_yaw_from_tf: true

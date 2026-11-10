@@ -134,7 +134,7 @@ Readings are median-filtered and must repeat, so a voltage dip under motor load 
 **Go home** on the dashboard sends the robot home at any time; it then stays docked until **Start patrol**.
 
 Docking: Nav2 stops only within about 25 cm / 14°, so Nav2 brings the robot 0.6 m in front of
-the dock and a docking controller follows the dock marker (ID 0) for the last part, with smooth
+the dock and a docking controller follows the dock marker (ID 66) for the last part, with smooth
 acceleration. Fake Pinky: 20/20 dockings, within 0.6 cm and 2°.
 Building the dock, calibration and tuning: [docs/docking.md](docs/docking.md).
 
@@ -153,7 +153,8 @@ All in `security_bringup/config/`. Rebuild (`colcon build`) after changing them.
 | `patrol_fake.yaml`, `fake.yaml` | Fake Pinky world, objects, waypoints, dock |
 | `perception_sim.yaml` | Pinky's own simulator camera |
 
-Print markers: `ros2 run security_perception make_markers --ids 0 3 5 7` (0 = dock, others = objects).
+Markers: DICT_5X5_100, **ID 66 = dock** (4 cm), **ID 42 = suspicious object** (2.7 cm); any other ID is also
+treated as an object. Print more: `ros2 run security_perception make_markers --ids 42 66`.
 
 ## Useful commands
 

@@ -12,15 +12,17 @@ perception:
     camera_hfov: 1.1519            # rad (66 deg), Pinky sim camera. TODO(demo): measure
     camera_offset_x: 0.035         # m, front_camera_link ahead of base_link (URDF)
     camera_flip: false             # true if the image is upside down
-    aruco_dictionary: DICT_4X4_50  # our printed markers (make_markers)
-    dock_marker_id: 0              # marker on the charging dock (never a suspicious object)
-    dock_marker_size: 0.08         # m, measure the printed dock marker
-    marker_size: 0.10              # m, black square side. TODO(demo): measure the print
+    aruco_dictionary: DICT_5X5_100 # the printed demo markers (IDs 0-99)
+    dock_marker_id: 66             # marker on the charging dock (never a suspicious object)
+    dock_marker_size: 0.04         # m, black square side of marker 66 as printed
+    marker_size: 0.027             # m, black square side of the object markers (42) as printed
     distance_source: auto          # auto | lidar | marker_size
     lidar_window_deg: 3.0
     lidar_yaw_from_tf: true        # rplidar_link is turned 180 deg in the URDF
     lidar_yaw_offset: 3.14159      # used only if TF has no LiDAR frame
-    max_detect_distance: 2.5
+    max_detect_distance: 1.0       # m, objects only (the dock is separate). The 2.7 cm
+                                   # marker is unreliable beyond ~0.6 m; rare far sightings
+                                   # would log noisy positions. 10 cm marker: 2.5
     process_rate: 10.0
     debug_image: true
     debug_rate: 5.0
