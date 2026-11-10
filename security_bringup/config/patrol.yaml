@@ -47,7 +47,7 @@ traffic_manager:
     dock_lateral_tolerance: 0.015    # m allowed sideways error in the last 8 cm
     dock_heading_tolerance_deg: 6.0
     dock_retries: 2
-    dock_contact_detect: true        # wait for a battery voltage rise on contact
+    dock_contact_detect: false       # demo dock has no charger: docked = at the docked distance
     dock_contact_rise: 0.12          # V
     dock_contact_timeout: 12.0       # s (/battery/voltage comes every 5 s)
     dock_undock_distance: 0.35
