@@ -229,3 +229,27 @@ def test_imu_turning_the_wrong_way_is_dropped(monkeypatch):
     assert abs(wrap(sim.true[2] - math.pi / 2)) < math.radians(1.0)
     assert not ctl.imu_ok
     assert any(e['event'] == 'dock_imu' for e in events)
+
+
+def test_restage_when_nav2_stops_too_close(monkeypatch):
+    """Real robot log: Nav2 (25 cm goal tolerance) stopped 0.3 m from the dock and
+    10 cm off its line, and every approach ended 'not lined up'. The controller
+    now backs up to the dock line first."""
+    cfg = DockConfig(docked_distance=DOCKED)
+    failures = []
+    for seed in range(15):
+        rng = random.Random(seed)
+        est = DockEstimate()
+        y = rng.choice([-1, 1]) * rng.uniform(0.07, 0.12)
+        sim = Sim(DOCKED + 0.30, y, math.pi + math.radians(rng.uniform(-14, 14)), est, rng)
+        est.seed(0.0, 0.0, 0.0)
+        monkeypatch.setattr(dc, 'time', sim)
+        events = []
+        ctl = DockingController(sim, est, ContactDetector(), events.append, cfg,
+                                detect_contact=False)
+        outcome = ctl.dock(lambda: False, lambda: False)
+        restaged = any(e['event'] == 'dock_restage' for e in events)
+        retries = sum(e['event'] == 'dock_retry' for e in events)
+        if outcome != 'docked' or not contacts_touch(sim.error()) or not restaged or retries:
+            failures.append((seed, outcome, restaged, retries))
+    assert not failures

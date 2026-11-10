@@ -89,7 +89,8 @@ ros2 run pinky_emotion emotion_server              # optional, LCD faces
 python3 ~/camera_publisher.py                      # copy it once, see docs/demo_guide.md
 
 # ---- Laptop
-ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map.yaml
+ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map.yaml \
+    params_file:=$(ros2 pkg prefix security_bringup)/share/security_bringup/config/nav2_arena.yaml
 ros2 launch pinky_navigation nav2_view.launch.xml  # RViz: 2D Pose Estimate first
 ros2 launch security_bringup patrol_system.launch.xml
 ```
@@ -158,6 +159,7 @@ All in `security_bringup/config/`. Rebuild (`colcon build`) after changing them.
 | `rules.yaml` | Warning rules, thresholds, battery levels, log folder |
 | `patrol_fake.yaml`, `fake.yaml` | Fake Pinky world, objects, waypoints, dock |
 | `perception_sim.yaml` | Pinky's own simulator camera |
+| `nav2_arena.yaml` | Nav2 for the small arena: AMCL tuned for precise walls, 0.12 m/s, short lookahead, 10 cm goal tolerance |
 
 Markers: DICT_5X5_100, **ID 66 = dock** (4 cm), **ID 42 = suspicious object** (2.7 cm); any other ID is also
 treated as an object. Print more: `ros2 run security_perception make_markers --ids 42 66`.
