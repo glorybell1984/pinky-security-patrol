@@ -21,7 +21,7 @@ The whole system also runs on a **fake Pinky** (simulated robot and world) for t
 | Lost / removed | Follow ends at the last seen position; an object missing from its spot is marked REMOVED |
 | Battery | Low 7.0 V: finish the follow, go home. Critical 6.8 V: stop and go home now |
 | Home dock | Nav2 to a staging point, then marker-guided precise docking onto charging contacts, undock, resume patrol |
-| Robot signals | Front lamp (`/set_lamp`) and LCD face (`/set_emotion`) follow the robot state |
+| Robot signals | Front lamp (`/set_lamp`), LED ring (`/set_led`, police lights on level 3) and LCD face (`/set_emotion`) follow the robot state |
 | Operator | Dashboard: map, object registry, event log, camera, start / stop / pause / go home / emergency stop |
 | Logs | `~/patrol_logs/events_<time>.csv`, every decision with positions |
 
@@ -78,11 +78,12 @@ Step-by-step demo: [docs/demo_guide.md](docs/demo_guide.md).
 # ---- Robot (ssh), one terminal each
 ros2 launch pinky_bringup bringup_robot.launch.xml
 ros2 run pinky_lamp_control main_node
+ros2 run pinky_led led_server                      # optional, LED ring
 ros2 run pinky_emotion emotion_server              # optional, LCD faces
 python3 ~/camera_publisher.py                      # copy it once, see docs/demo_guide.md
 
 # ---- Laptop
-ros2 launch pinky_navigation bringup_launch.xml map:=<your_map>.yaml
+ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map.yaml
 ros2 launch pinky_navigation nav2_view.launch.xml  # RViz: 2D Pose Estimate first
 ros2 launch security_bringup patrol_system.launch.xml
 ```
@@ -116,7 +117,7 @@ Chrome's "zygote" message in the terminal is harmless.
 |---|---|---|
 | 1 | New object reported | Log position, keep patrolling |
 | 2 | Same object on a later pass (within 0.3 m, 20 s or more later) | Stop, turn to it, red lamp blinks 5 s, LCD angry |
-| 3 | Object moving (picked up) | Follow at 0.7 m, magenta lamp; lost after 5 s -> last position -> patrol |
+| 3 | Object moving (picked up) | Follow at 0.7 m, magenta lamp, police lights on the LED ring; lost after 5 s -> last position -> patrol |
 | Removed | Its spot is in view and empty | Logged, keep patrolling |
 
 ## Battery and home dock
@@ -153,6 +154,9 @@ All in `security_bringup/config/`. Rebuild (`colcon build`) after changing them.
 | `perception_sim.yaml` | Pinky's own simulator camera |
 
 Print markers: `ros2 run security_perception make_markers --ids 0 3 5 7` (0 = dock, others = objects).
+Using markers you already have? `ros2 run security_perception find_dictionary` tells which ArUco dictionary they are.
+
+Map: `security_bringup/maps/police_map.yaml` with its patrol route in `patrol.yaml` (from JW).
 
 ## Useful commands
 

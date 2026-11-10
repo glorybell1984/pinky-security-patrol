@@ -13,11 +13,19 @@ traffic_manager:
     lamp_topic: /fleet/lamp        # mode for the dashboard (OFF / BLINK / ON)
     lamp_service: /set_lamp        # pinky_lamp_control on the robot, "" to disable
     emotion_service: /set_emotion  # pinky_emotion LCD faces, "" to disable
+    led_service: /set_led          # pinky_led ring: police lights on level 3, "" to disable
     cmd_vel_topic: ""              # default: <namespace>/cmd_vel
-    waypoints: [0.15, -3.61, 0.0,
-                0.94, -3.38, 90.0,
-                0.94, -2.40, 180.0,
-                0.15, -2.40, -90.0]
+    # Route on maps/police_map.yaml (JW's map and waypoints from dev-jw; his WP6
+    # (2.43, 2.43) was outside the map and is left out). Heading = towards the next
+    # waypoint, so the robot does not turn on the spot at each one.
+    waypoints: [0.12, 0.49, -42.0,
+                0.47, 0.18, 36.0,
+                1.01, 0.57, 89.0,
+                1.02, 1.45, 96.0,
+                0.93, 2.33, 22.0,
+                1.18, 2.43, 119.0,
+                0.73, 3.23, 36.0,
+                0.91, 3.36, -105.0]
     nav_retry: 1
     waypoint_pause: 1.0            # s, look around a moment at each waypoint
     pose_timeout: 3.0
@@ -27,7 +35,8 @@ traffic_manager:
     # Where the robot waits to be charged (x, y, yaw_deg in the map frame). Pick a
     # free spot next to a power socket; the robot drives there on low battery.
     # TODO(demo): set from RViz Publish Point, like the waypoints.
-    charger_pose: [0.15, -3.61, 0.0]   # robot pose WHEN DOCKED, facing the dock
+    # TODO(demo): placeholder at WP0 facing -x (free on police_map, staging point free).
+    charger_pose: [0.12, 0.49, 180.0]  # robot pose WHEN DOCKED, facing the dock
     charger_retries: 3
 
     # Dock with charging contacts (docs/docking.md). Calibrate: put the robot on

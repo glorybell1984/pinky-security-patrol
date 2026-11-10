@@ -72,6 +72,7 @@ Checked against [pinklab-art/pinky_pro](https://github.com/pinklab-art/pinky_pro
 | Camera pose | `front_camera_link` 0.035 m ahead of `base_link`, tilted 8° down; sim FOV 1.1519 rad | `camera_offset_x: 0.035`, `camera_hfov: 1.1519` |
 | Battery | `battery_publisher` (in `bringup_robot`): `/battery/voltage`, `/battery/percent` (Float32, every 5 s). Pinky warns at 6.8 V | task manager: LOW 7.0 V, CRITICAL 6.8 V |
 | Lamp | `pinky_lamp_control` service `/set_lamp` (`SetLamp`: color, mode 0 off / 1 on / 2 blink / 3 dimming, time ms). **Not started by bringup** | traffic manager calls `/set_lamp` |
+| LED ring | `pinky_led` service `/set_led` (`SetLed`: set_pixel / fill / clear, 8 pixels). Not started by bringup | blue patrol, red level 2, police lights level 3, amber going home, green docked |
 | LCD face | `pinky_emotion` service `/set_emotion` (`hello basic angry bored fun happy interest sad`) | `angry` on level 2, `interest` on level 3, `basic` on patrol |
 | Nav2 | `navigate_to_pose`, 0.2 m/s, goal tolerance 0.25 m / 0.25 rad, `cmd_vel` (Twist) | same names, no change |
 
@@ -99,11 +100,12 @@ Without it everything still runs, but only the dashboard shows the lamp
 # ---- Robot (ssh pinky@192.168.4.1), one terminal each
 ros2 launch pinky_bringup bringup_robot.launch.xml
 ros2 run pinky_lamp_control main_node
+ros2 run pinky_led led_server                      # optional, LED ring (police lights)
 ros2 run pinky_emotion emotion_server              # optional, LCD faces
 python3 ~/camera_publisher.py                      # see "Camera on the robot"
 
 # ---- Laptop
-ros2 launch pinky_navigation bringup_launch.xml map:=<your_map>.yaml
+ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map.yaml
 ros2 launch pinky_navigation nav2_view.launch.xml  # RViz: 2D Pose Estimate first!
 ros2 launch security_bringup patrol_system.launch.xml
 ```
@@ -120,7 +122,7 @@ so the rest of this repository does not have to be built there:
 scp ~/patrol_ws/src/pinky-security-patrol/security_perception/security_perception/camera_publisher.py pinky@192.168.4.1:~/
 ssh pinky@192.168.4.1
 python3 ~/camera_publisher.py
-python3 ~/camera_publisher.py --ros-args -p rotate:=180     # if the image is upside down
+python3 ~/camera_publisher.py --ros-args -p rotate:=0       # turned 180 by default (Pinky Pro); 0 if then upside down
 python3 ~/camera_publisher.py --ros-args -p swap_rb:=true   # if red and blue are swapped
 python3 ~/camera_publisher.py --ros-args -p backend:=picamera2 -p fps:=10.0
 ```
@@ -147,12 +149,13 @@ The simulator world has no ArUco markers, so this tests patrol, pause, e-stop an
 | # | Task | Where | How to check |
 |---|---|---|---|
 | 1 | **Camera publisher** on the robot | `camera_publisher.py` params `rotate`, `swap_rb` | Dashboard camera panel: upright image, correct colors, ~15 Hz |
+| 2a | **Class markers?** | `ros2 run security_perception find_dictionary` with a marker in front of the camera | Prints the dictionary; set `aruco_dictionary` |
 | 2 | **Print ArUco markers** (DICT_4X4_50) | `ros2 run security_perception make_markers --ids 3 5 7` | Black square = `marker_size` (default 10 cm). Measure it. (The class pinkylib markers are a different set; use ours) |
 | 3 | **Test detection** | Dashboard camera panel shows boxes + distance | Distance within ~10 cm at 1 m. Find the max detection distance |
 | 4 | **Camera FOV** | `camera_hfov` in `perception.yaml` | Marker at 1 m, 30 cm to the side: map position within 5 cm. If off, adjust `camera_hfov` |
 | 5 | **Map** | `ros2 launch pinky_navigation map_building.launch.xml` -> teleop -> `map_saver_cli -f <name>` | Map loads in Nav2, AMCL localizes |
 | 6b | **Home dock** | `config/patrol.yaml` `charger_pose`, `dock_docked_distance` | Build the dock, then `ros2 service call /traffic/dock_calibrate std_srvs/srv/Trigger` with the robot on it. See [docking.md](docking.md) |
-| 6 | **Patrol waypoints** | `config/patrol.yaml` `waypoints` | RViz *Publish Point* -> `ros2 topic echo /clicked_point --once`. Pick points where markers will be in view |
+| 6 | **Patrol waypoints** (JW's route on `police_map` is already in) | `config/patrol.yaml` `waypoints` | RViz *Publish Point* -> `ros2 topic echo /clicked_point --once`. Pick points where markers will be in view |
 | 7 | **Lamp and LCD** | `pinky_lamp_control`, `pinky_emotion` running on the robot | Patrol: blue breathing. Level 2: red blink + angry face |
 | 8 | **Tune thresholds** with real noise | `config/rules.yaml` | No false MOVING while patrolling. Raise `moving_threshold` if needed |
 | 9 | **Rehearse** the scenario above with real boxes | | Twice, with a stopwatch |

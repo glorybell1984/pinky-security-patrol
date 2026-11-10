@@ -12,7 +12,7 @@ runs as a plain script without building this repository on the robot:
     scp camera_publisher.py pinky@192.168.4.1:~/
     ssh pinky@192.168.4.1
     python3 camera_publisher.py
-    python3 camera_publisher.py --ros-args -p rotate:=180 -p fps:=10.0
+    python3 camera_publisher.py --ros-args -p rotate:=0 -p fps:=10.0   # if upright already
 
 Camera backends, tried in order (param backend: auto | pinkylib | picamera2 | opencv):
     pinkylib   from pinkylib import Camera  (what the class notebooks use)
@@ -94,7 +94,7 @@ class CameraPublisher(Node):
         p('height', 480)
         p('fps', 15.0)
         p('jpeg_quality', 80)
-        p('rotate', 0)                     # 0, 90, 180, 270 (degrees clockwise)
+        p('rotate', 180)                   # Pinky Pro image comes out upside down (found by JW)
         p('swap_rb', False)                # True if red and blue look swapped
         p('topic', '/camera/image_raw/compressed')
         p('frame_id', 'front_camera_link')

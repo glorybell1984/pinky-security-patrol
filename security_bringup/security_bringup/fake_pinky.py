@@ -49,9 +49,9 @@ from visualization_msgs.msg import Marker, MarkerArray
 from security_interfaces.msg import ObjectDetection, ObjectDetectionArray
 
 try:  # Pinky's interfaces, to test the real lamp / LCD calls
-    from pinky_interfaces.srv import Emotion, SetLamp
+    from pinky_interfaces.srv import Emotion, SetLamp, SetLed
 except ImportError:
-    Emotion = SetLamp = None
+    Emotion = SetLamp = SetLed = None
 
 LAMP_MODES = {0: 'off', 1: 'on', 2: 'blink', 3: 'dimming'}
 
@@ -195,6 +195,8 @@ class FakePinky(Node):
             self.create_service(SetLamp, '/set_lamp', self.on_set_lamp, callback_group=self.cb)
             self.create_service(Emotion, '/set_emotion', self.on_set_emotion,
                                 callback_group=self.cb)
+            self.create_service(SetLed, '/set_led', self.on_set_led, callback_group=self.cb)
+            self.led_police = 0
 
         ActionServer(self, NavigateToPose, f'{ns}/navigate_to_pose', self.execute_nav,
                      goal_callback=lambda _: GoalResponse.ACCEPT,
@@ -285,6 +287,19 @@ class FakePinky(Node):
         self.get_logger().info(f'[set_lamp] {LAMP_MODES.get(req.mode, req.mode)} '
                                f'rgb=({c.r:.1f},{c.g:.1f},{c.b:.1f}) time={req.time} ms')
         res.result = True
+        return res
+
+    def on_set_led(self, req, res):
+        if req.command == 'set_pixel':
+            self.led_police += 1
+            if self.led_police == 1:
+                self.get_logger().info('[set_led] police lights (red/blue halves)')
+        else:
+            if self.led_police:
+                self.get_logger().info(f'[set_led] police lights: {self.led_police} pixel calls')
+            self.led_police = 0
+            self.get_logger().info(f'[set_led] {req.command} rgb=({req.r},{req.g},{req.b})')
+        res.success = True
         return res
 
     def on_set_emotion(self, req, res):
