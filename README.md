@@ -197,6 +197,7 @@ python3 -m pytest security_traffic_manager/test    # docking math (5 tests)
 | Document | Contents |
 |---|---|
 | [docs/demo_guide.md](docs/demo_guide.md) | Fake demo scenario, real robot start order, camera setup, remaining checklist |
+| [docs/limitations.md](docs/limitations.md) | **Project goal:** every Pinky Pro capability, what we measured, its limits and workarounds |
 | [docs/docking.md](docs/docking.md) | Home dock: how docking works, building the dock, calibration, tuning |
 | [docs/architecture.md](docs/architecture.md) | Topics, services, states, design decisions |
 | [docs/scenarios.md](docs/scenarios.md) | Demo scenario and test checklist (fake / real) |
