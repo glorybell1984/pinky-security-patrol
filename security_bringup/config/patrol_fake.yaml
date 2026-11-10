@@ -16,3 +16,5 @@ traffic_manager:
     follow_update_period: 0.5
     follow_min_distance: 0.5
     follow_replan_distance: 0.2
+    charger_pose: [0.5, 2.0, 0.0]  # robot starts here (fake.yaml start_pose)
+    charger_retries: 3

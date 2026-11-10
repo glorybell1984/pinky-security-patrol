@@ -14,6 +14,26 @@ from rclpy.time import Time
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
+# Pinky's own interfaces (github.com/pinklab-art/pinky_pro). Optional: when the
+# pinky_pro workspace is not sourced, the lamp mode is only published as a String.
+try:
+    from pinky_interfaces.srv import Emotion, SetLamp
+except ImportError:  # pragma: no cover
+    Emotion = SetLamp = None
+
+# Our lamp mode -> pinky_lamp_control request.
+# SetLamp.mode: 0 off, 1 on, 2 blink, 3 dimming. time: ms per blink / dimming half cycle.
+LAMP_STYLES = {
+    'OFF':   {'rgb': (0.0, 0.3, 1.0), 'mode': 3, 'time': 2000},  # patrolling: slow blue breathing
+    'BLINK': {'rgb': (1.0, 0.0, 0.0), 'mode': 2, 'time': 300},   # level 2 hold: red blink
+    'ON':    {'rgb': (1.0, 0.0, 0.6), 'mode': 2, 'time': 120},   # level 3 follow: fast magenta
+    'LOW':   {'rgb': (1.0, 0.6, 0.0), 'mode': 2, 'time': 800},   # low battery, going to charge
+    'CHARGE': {'rgb': (0.0, 1.0, 0.2), 'mode': 3, 'time': 3000},  # at the charger: green
+}
+# Our lamp mode -> pinky_emotion face on the LCD.
+EMOTIONS = {'OFF': 'basic', 'BLINK': 'angry', 'ON': 'interest', 'LOW': 'sad',
+            'CHARGE': 'bored'}
+
 SUCCEEDED = 'succeeded'
 FAILED = 'failed'
 ABORTED = 'aborted'          # cancelled by us (pause, preempt, action cancel)
@@ -27,12 +47,28 @@ def yaw_from_quaternion(q):
 class RobotAdapter:
 
     def __init__(self, node, namespace='', base_frame='base_footprint', global_frame='map',
-                 lamp_topic='/fleet/lamp', cmd_vel_topic='', callback_group=None):
+                 lamp_topic='/fleet/lamp', cmd_vel_topic='', callback_group=None,
+                 lamp_service='/set_lamp', emotion_service='/set_emotion'):
         self.node = node
         ns = namespace.rstrip('/')
         self.global_frame = global_frame
         self.base_frame = base_frame
         self.lamp = 'OFF'
+        self._lamp_sent = None       # last mode the real lamp accepted
+        self._emotion_sent = None
+
+        self.lamp_client = None
+        self.emotion_client = None
+        if SetLamp is not None and lamp_service:
+            self.lamp_client = node.create_client(SetLamp, lamp_service,
+                                                  callback_group=callback_group)
+        if Emotion is not None and emotion_service:
+            self.emotion_client = node.create_client(Emotion, emotion_service,
+                                                     callback_group=callback_group)
+        if SetLamp is None:
+            node.get_logger().warn('pinky_interfaces not found: lamp only published on '
+                                   f'{lamp_topic}. Source the pinky_pro workspace to drive '
+                                   'the real lamp.')
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, node)
@@ -144,14 +180,35 @@ class RobotAdapter:
 
     # ------------------------------------------------------------------ lamp
     def set_lamp(self, mode):
-        """mode: OFF, ON or BLINK.
+        """mode: OFF, ON, BLINK, LOW or CHARGE. Called often (every status tick).
 
-        TODO(real robot): Pinky's lamp/LED interface is not confirmed yet.
-        This publishes the mode on lamp_topic (default /fleet/lamp). Either add
-        a small bridge node on the robot that drives pinky_led/pinky_lamp_control
-        from this topic, or replace this method with the real service call.
+        Always publishes the mode on lamp_topic for the dashboard. When Pinky's
+        pinky_lamp_control (/set_lamp) and pinky_emotion (/set_emotion) servers
+        are running, it also drives the real lamp and LCD face. A request is only
+        sent when the mode changes, and retried until the server is reachable.
         """
-        if mode == self.lamp:
-            return
-        self.lamp = mode
-        self.lamp_pub.publish(String(data=mode))
+        if mode != self.lamp:
+            self.lamp = mode
+            self.lamp_pub.publish(String(data=mode))
+        if self._lamp_sent != mode and self.lamp_client is not None \
+                and self.lamp_client.service_is_ready():
+            style = LAMP_STYLES.get(mode, LAMP_STYLES['OFF'])
+            req = SetLamp.Request()
+            req.color.r, req.color.g, req.color.b = style['rgb']
+            req.color.a = 1.0
+            req.mode = style['mode']
+            req.time = style['time']
+            self.lamp_client.call_async(req)
+            self._lamp_sent = mode
+        if self._emotion_sent != mode and self.emotion_client is not None \
+                and self.emotion_client.service_is_ready():
+            self.emotion_client.call_async(Emotion.Request(emotion=EMOTIONS.get(mode, 'basic')))
+            self._emotion_sent = mode
+
+    def lamp_off(self):
+        """Turn the real lamp off (on shutdown)."""
+        try:
+            if self.lamp_client is not None and self.lamp_client.service_is_ready():
+                self.lamp_client.call_async(SetLamp.Request(mode=0))
+        except Exception:  # context may already be shut down after Ctrl+C
+            pass

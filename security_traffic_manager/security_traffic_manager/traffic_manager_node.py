@@ -6,9 +6,13 @@ Action servers
 Services
     /traffic/hold_and_signal  HoldAndSignal   lamp signal while the robot holds
     /traffic/pause, /traffic/resume, /traffic/emergency_stop   std_srvs/Trigger
+    /traffic/go_to_charger    std_srvs/Trigger  drive to charger_pose, then wait there
+                              (events: charger_reached, charger_failed)
+    /traffic/stop             std_srvs/Trigger  end any patrol / follow / charger drive
 Publishes
     /traffic/robot_status   RobotState   5 Hz (pose from TF, motion, lamp, pass)
     /traffic/waypoints      PoseArray    1 Hz (for the dashboard and RViz)
+    /traffic/charger        PoseStamped  1 Hz (charger_pose, for the dashboard and RViz)
     /traffic/events         std_msgs/String (JSON)
 Subscribes
     /perception/detections  ObjectDetectionArray  (target positions for follow)
@@ -19,7 +23,7 @@ import threading
 import time
 
 import rclpy
-from geometry_msgs.msg import Pose, PoseArray
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -50,6 +54,8 @@ class TrafficManager(Node):
         p('global_frame', 'map')
         p('base_frame', 'base_footprint')
         p('lamp_topic', '/fleet/lamp')
+        p('lamp_service', '/set_lamp')          # pinky_lamp_control, '' to disable
+        p('emotion_service', '/set_emotion')    # pinky_emotion LCD faces, '' to disable
         p('cmd_vel_topic', '')
         p('waypoints', [0.0, 0.0, 0.0])
         p('nav_retry', 1)
@@ -58,22 +64,28 @@ class TrafficManager(Node):
         p('follow_update_period', 0.5)
         p('follow_min_distance', 0.5)
         p('follow_replan_distance', 0.2)
+        p('charger_pose', [0.0, 0.0, 0.0])     # x, y, yaw_deg in the map frame
+        p('charger_retries', 3)
         g = lambda name: self.get_parameter(name).value  # noqa: E731
 
         self.robot_id = g('robot_id')
         self.waypoints = parse_waypoints(list(g('waypoints')))
         self.adapter = RobotAdapter(self, g('namespace'), g('base_frame'), g('global_frame'),
-                                    g('lamp_topic'), g('cmd_vel_topic'), self.cb)
+                                    g('lamp_topic'), g('cmd_vel_topic'), self.cb,
+                                    g('lamp_service'), g('emotion_service'))
         self.patrol = PatrolExecutor(self.adapter, self.waypoints, self.emit,
                                      g('nav_retry'), g('waypoint_pause'))
         self.follow = FollowController(self.adapter, self.get_detection, self.emit,
                                        g('follow_update_period'), g('follow_min_distance'),
                                        g('follow_replan_distance'))
         self.health = HealthMonitor(self.adapter, self.emit, g('pose_timeout'))
+        cp = list(g('charger_pose'))
+        self.charger_pose = (float(cp[0]), float(cp[1]), math.radians(float(cp[2])))
+        self.charger_retries = int(g('charger_retries'))
 
         # state
         self.active_token = 0          # increments on each new action; old loops exit
-        self.activity = 'STOPPED'      # STOPPED, PATROLLING, FOLLOWING
+        self.activity = 'STOPPED'      # STOPPED, PATROLLING, FOLLOWING, RETURNING, CHARGING
         self.paused = False
         self.estop = False
         self.hold_until = 0.0
@@ -84,6 +96,7 @@ class TrafficManager(Node):
         self.events_pub = self.create_publisher(String, '/traffic/events', 50)
         self.status_pub = self.create_publisher(RobotState, '/traffic/robot_status', 10)
         self.wp_pub = self.create_publisher(PoseArray, '/traffic/waypoints', 10)
+        self.charger_pub = self.create_publisher(PoseStamped, '/traffic/charger', 10)
         self.create_subscription(ObjectDetectionArray, '/perception/detections',
                                  self.on_detections, 10, callback_group=self.cb)
 
@@ -101,6 +114,9 @@ class TrafficManager(Node):
         self.create_service(Trigger, '/traffic/resume', self.on_resume, callback_group=self.cb)
         self.create_service(Trigger, '/traffic/emergency_stop', self.on_estop,
                             callback_group=self.cb)
+        self.create_service(Trigger, '/traffic/go_to_charger', self.on_go_to_charger,
+                            callback_group=self.cb)
+        self.create_service(Trigger, '/traffic/stop', self.on_stop, callback_group=self.cb)
 
         self.create_timer(0.2, self.publish_status, callback_group=self.cb)
         self.create_timer(1.0, self.publish_waypoints, callback_group=self.cb)
@@ -210,6 +226,57 @@ class TrafficManager(Node):
         res.success = True
         return res
 
+    def on_go_to_charger(self, req, res):
+        token = self.new_token()       # ends any running patrol or follow loop
+        self.hold_until = 0.0
+        self.activity = 'RETURNING'
+        x, y, yaw = self.charger_pose
+        threading.Thread(target=self.run_to_charger, args=(token,), daemon=True).start()
+        res.success, res.message = True, f'Going to charger at ({x:.2f}, {y:.2f})'
+        return res
+
+    def run_to_charger(self, token):
+        x, y, yaw = self.charger_pose
+        self.emit({'event': 'returning_to_charger',
+                   'message': f'Driving to the charger at ({x:.2f}, {y:.2f})'})
+
+        def should_stop():
+            return self.active_token != token
+
+        attempt = 0
+        while not should_stop():
+            if self.is_paused():
+                time.sleep(0.2)
+                continue
+            result = self.adapter.navigate(x, y, yaw, should_abort=should_stop)
+            if result == 'succeeded':
+                self.adapter.stop()
+                self.activity = 'CHARGING'
+                self.emit({'event': 'charger_reached',
+                           'message': 'At the charger. Plug in the charging cable.'})
+                return
+            if result == 'aborted':
+                if should_stop():
+                    return
+                continue       # cancelled by a pause or e-stop: try again after it
+            attempt += 1
+            if attempt > self.charger_retries:
+                if self.active_token == token:
+                    self.activity = 'STOPPED'
+                self.emit({'event': 'charger_failed',
+                           'message': f'Could not reach the charger ({result}). '
+                                      'Drive the robot there by hand.'})
+                return
+            time.sleep(1.0)
+
+    def on_stop(self, req, res):
+        self.new_token()
+        self.hold_until = 0.0
+        self.activity = 'STOPPED'
+        self.adapter.stop()
+        res.success, res.message = True, 'Stopped'
+        return res
+
     def on_pause(self, req, res):
         self.paused = True
         self.adapter.stop()
@@ -245,7 +312,7 @@ class TrafficManager(Node):
             return 'ERROR'
         if time.monotonic() < self.hold_until:
             return 'HOLDING'
-        if self.activity in ('PATROLLING', 'FOLLOWING'):
+        if self.activity in ('PATROLLING', 'FOLLOWING', 'RETURNING'):
             return 'MOVING'
         return 'STOPPED'
 
@@ -258,6 +325,10 @@ class TrafficManager(Node):
             self.adapter.set_lamp('BLINK')
         elif self.activity == 'FOLLOWING' and not self.is_paused():
             self.adapter.set_lamp('ON')
+        elif self.activity == 'RETURNING':
+            self.adapter.set_lamp('LOW')
+        elif self.activity == 'CHARGING':
+            self.adapter.set_lamp('CHARGE')
         else:
             self.adapter.set_lamp('OFF')
 
@@ -284,6 +355,12 @@ class TrafficManager(Node):
             pose.orientation.w = math.cos(yaw / 2.0)
             arr.poses.append(pose)
         self.wp_pub.publish(arr)
+        x, y, yaw = self.charger_pose
+        ps = PoseStamped()
+        ps.header = arr.header
+        ps.pose.position.x, ps.pose.position.y = x, y
+        ps.pose.orientation.z, ps.pose.orientation.w = math.sin(yaw / 2), math.cos(yaw / 2)
+        self.charger_pub.publish(ps)
 
 
 def main(args=None):
@@ -296,7 +373,11 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.adapter.stop()
+        try:
+            node.adapter.stop()
+            node.adapter.lamp_off()
+        except Exception:  # context already shut down by Ctrl+C
+            pass
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

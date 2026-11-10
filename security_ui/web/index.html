@@ -54,7 +54,7 @@
         <div class="card stat"><p class="stat-label">Robot state</p><p class="stat-value" id="s-task">—</p><p class="stat-sub" id="s-task-sub">Waiting for robot</p></div>
         <div class="card stat"><p class="stat-label">Patrol pass</p><p class="stat-value" id="s-pass">—</p><p class="stat-sub" id="s-pass-sub"></p></div>
         <div class="card stat"><p class="stat-label">Tracked objects</p><p class="stat-value" id="s-objects">0</p><p class="stat-sub" id="s-objects-sub">None yet</p></div>
-        <div class="card stat"><p class="stat-label">Robot position</p><p class="stat-value mono-num" id="s-pose">—</p><p class="stat-sub">map frame</p></div>
+        <div class="card stat" id="battery-card"><p class="stat-label">Battery</p><p class="stat-value mono-num" id="s-battery">—</p><p class="stat-sub" id="s-battery-sub">No /fleet/battery yet</p><div class="battery-bar" aria-hidden="true"><span id="battery-fill"></span></div></div>
       </section>
 
       <div class="split">
@@ -88,6 +88,7 @@
               <div><dt>Lamp</dt><dd id="r-lamp">—</dd></div>
               <div><dt>Current object</dt><dd id="r-object">—</dd></div>
               <div><dt>Waypoint</dt><dd id="r-wp">—</dd></div>
+              <div><dt>Position</dt><dd class="mono-num" id="s-pose">—</dd></div>
               <div><dt>Last update</dt><dd id="r-age">—</dd></div>
             </dl>
           </section>
@@ -97,8 +98,9 @@
           </section>
           <section class="card" id="sim-card" hidden aria-label="Simulation">
             <div class="card-head"><h2>Fake Pinky</h2><span class="tag">simulation</span></div>
-            <p class="small muted">Act out the scenario: pick up an object, hide or remove it.</p>
+            <p class="small muted">Act out the scenario: pick up, hide or remove an object, drain the battery or plug in the charger.</p>
             <div id="sim-objects" class="sim-list"></div>
+            <div id="sim-battery" class="sim-list"></div>
           </section>
         </aside>
       </div>

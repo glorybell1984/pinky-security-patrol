@@ -1,21 +1,37 @@
 <!--
-  REAL robot. Start Pinky's bringup and Nav2 (with your saved map) first, then:
-    ros2 launch security_bringup patrol_system.launch.xml
+  REAL robot (or Pinky's own simulator).
+
+  Robot:  ros2 launch pinky_bringup bringup_robot.launch.xml
+          ros2 run pinky_lamp_control main_node
+          ros2 run pinky_emotion emotion_server        (optional, LCD faces)
+          python3 camera_publisher.py
+  Laptop: ros2 launch pinky_navigation bringup_launch.xml map:=<map>.yaml
+          ros2 launch pinky_navigation nav2_view.launch.xml   (2D Pose Estimate)
+          ros2 launch security_bringup patrol_system.launch.xml
+
+  Pinky simulator: start bringup_sim and gz_bringup_launch instead, then
+          ros2 launch security_bringup patrol_system.launch.xml sim:=true
 -->
 <launch>
   <arg name="rosbridge" default="true"/>
+  <arg name="sim" default="false" description="true: Pinky MuJoCo or Gazebo simulator"/>
   <let name="config_dir" value="$(find-pkg-share security_bringup)/config"/>
+  <let name="perception_config" value="perception_sim.yaml" if="$(var sim)"/>
+  <let name="perception_config" value="perception.yaml" unless="$(var sim)"/>
 
   <node pkg="security_perception" exec="perception" output="screen">
-    <param from="$(var config_dir)/perception.yaml"/>
+    <param from="$(var config_dir)/$(var perception_config)"/>
+    <param name="use_sim_time" value="$(var sim)"/>
   </node>
 
   <node pkg="security_traffic_manager" exec="traffic_manager" output="screen">
     <param from="$(var config_dir)/patrol.yaml"/>
+    <param name="use_sim_time" value="$(var sim)"/>
   </node>
 
   <node pkg="security_task_manager" exec="task_manager" output="screen">
     <param from="$(var config_dir)/rules.yaml"/>
+    <param name="use_sim_time" value="$(var sim)"/>
   </node>
 
   <include if="$(var rosbridge)"

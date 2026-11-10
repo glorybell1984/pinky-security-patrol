@@ -17,3 +17,12 @@ task_manager:
     hold_duration: 5.0            # s, level 2 stop with blinking lamp
     auto_start_patrol: true
     log_dir: ~/patrol_logs
+
+    # Battery (Pinky Pro 2-cell Li-ion, /battery/voltage every 5 s, about 8.4 V full)
+    battery_enabled: true
+    battery_low_voltage: 7.0        # finish the current follow, then go to the charger
+    battery_critical_voltage: 6.8   # stop everything and go to the charger now
+    battery_charged_voltage: 8.0    # "charged" message on the dashboard
+    battery_window: 3               # median of the last 3 readings (motor load sag)
+    battery_confirm: 2              # readings in a row before the level changes
+    auto_resume_after_charge: false # Pinky charges by cable: the operator unplugs and restarts
