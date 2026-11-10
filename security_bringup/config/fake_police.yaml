@@ -4,9 +4,10 @@
 # (picked from the map's free space); move them to where they will really be.
 fake_pinky:
   ros__parameters:
-    start_pose: [0.15, 0.10, -90.0]      # on the dock (patrol_fake_police.yaml charger_pose)
-    dock_pose: [0.15, 0.10, -90.0]       # DRAFT: dock against the bottom wall, robot faces it
-    dock_docked_distance: 0.15
+    start_pose: [0.01, 0.10, 180.0]      # on the dock (patrol_fake_police.yaml charger_pose)
+    dock_pose: [0.01, 0.10, 180.0]       # real dock: left wall, marker 66 on its front at x -0.13
+    dock_docked_distance: 0.14
+    dock_marker_min_range: 0.25          # real camera: marker blurred when close (unmeasured)
     linear_speed: 0.2                    # Pinky Nav2: 0.2 m/s
     angular_speed: 1.0
     objects: [42.0, 1.15, 3.70]          # DRAFT: marker 42 at the top end of the corridor

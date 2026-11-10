@@ -7,7 +7,7 @@ staging point this controller drives with cmd_vel:
     1. ACQUIRE   wait for the dock marker; turn slowly left and right if not seen
        RESTAGE   Nav2 may stop up to 25 cm from the staging point: if the robot is
                  too close to the dock or too far off its centre line to line up
-                 in time, turn, reverse to the line (restage_distance out), and
+                 in time, turn, reverse to the line (docked + restage_run out), and
                  face the dock again. Retries use the same move.
     2. APPROACH  follow the dock's centre line (pure pursuit to the line) up to
                  the pre-dock point (predock_distance, e.g. 0.30 m)
@@ -99,7 +99,7 @@ class DockConfig:
     turn_speed: float = 1.0          # rad/s, the 180 deg turn (Nav2 uses 1.0 too)
     final_speed: float = 0.05        # m/s, straight run onto the contacts
     # re-stage on the dock line when Nav2 left the robot too close / too far off
-    restage_distance: float = 0.55   # m from the marker, on the dock's centre line
+    restage_run: float = 0.40        # m of dock line in front of the docked pose
     restage_min_run: float = 0.35    # m, approach needs at least this much line
     restage_max_slope: float = 0.35  # sideways error / distance left that still converges
     # backward docking (contacts at the rear): always two-phase
@@ -392,14 +392,14 @@ class DockingController:
         return run < self.cfg.restage_min_run or abs(y) > self.cfg.restage_max_slope * max(run, 0.01)
 
     def restage(self, should_stop, is_paused):
-        """Reverse to the dock line at restage_distance, then face the dock.
+        """Reverse to the dock line at docked + restage_run, then face the dock.
         Uses the dock estimate (odom frame), so the marker may leave the view."""
         self.phase = 'RESTAGE'
         p = self.a.odom_pose()
         if p is None:
             return False
         x, y, _ = self.est.robot_in_dock(*p)
-        tx = self.cfg.restage_distance
+        tx = self.cfg.docked_distance + self.cfg.restage_run
         dist = math.hypot(tx - x, y)
         if dist > 0.02:
             # back towards the target: the robot's rear points at it (front at the dock)
@@ -494,9 +494,9 @@ class DockingController:
             if attempt == c.align_corrections:
                 break
             if abs(y) > c.align_lateral_tolerance:
-                # turn - drive - turn onto the line. Go forward if there is room for
-                # the straight run afterwards, else backwards (marker gets farther).
-                forward = x - c.correction_step >= c.docked_distance + c.min_final_distance
+                # turn - drive - turn onto the line, BACKWARDS: the marker stays in
+                # view and sharp (a fixed-focus camera may not read it any closer)
+                forward = False
                 tx = x - c.correction_step if forward else x + c.correction_step
                 dist = math.hypot(c.correction_step, y)
                 direction = math.atan2(-y, tx - x)       # robot -> target, dock frame
@@ -587,7 +587,8 @@ class DockingController:
                 x, y, _ = self.est.robot_in_dock(*p)
                 self.emit({'event': 'dock_restage', 'message':
                            f'Docking: {x:.2f} m from the dock, {y * 100:+.0f} cm off its line: '
-                           f'backing up to the line at {c.restage_distance:.2f} m'})
+                           f'backing up to the line at '
+                           f'{c.docked_distance + c.restage_run:.2f} m'})
                 if not self.restage(should_stop, is_paused):
                     return 'aborted'
                 if not self.acquire(should_stop, is_paused):

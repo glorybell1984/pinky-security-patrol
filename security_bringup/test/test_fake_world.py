@@ -9,8 +9,8 @@ MAP = os.path.join(os.path.dirname(__file__), '..', 'maps', 'police_map.yaml')
 # patrol_fake_police.yaml waypoints and dock
 WPS = [(0.50, 0.45, 0), (1.00, 1.50, 90), (1.05, 3.30, 90),
        (0.60, 3.35, 180), (1.00, 2.20, -90), (0.95, 0.80, -90)]
-DOCKED = (0.15, 0.10)
-STAGING = (0.15, 0.70)
+DOCKED = (0.01, 0.10)          # real dock (RViz clicks), robot faces the left wall
+STAGING = (0.61, 0.13)         # 0.6 m in front of the docked pose
 OBJECT_42 = (1.15, 3.70)
 
 

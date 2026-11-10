@@ -20,8 +20,11 @@ traffic_manager:
     follow_update_period: 0.5
     follow_min_distance: 0.5
     follow_replan_distance: 0.2
-    charger_pose: [0.15, 0.10, -90.0]  # DRAFT, docked pose (fake_police.yaml dock_pose)
+    charger_pose: [0.01, 0.10, 180.0]  # real dock (fake_police.yaml dock_pose)
     dock_enabled: true
-    dock_docked_distance: 0.15
+    dock_docked_distance: 0.14
+    dock_predock_distance: 0.35      # two-phase, as on the real robot
+    dock_align_lateral_tolerance: 0.015
+    dock_align_heading_tolerance_deg: 3.0
     start_docked: true
     charger_retries: 3

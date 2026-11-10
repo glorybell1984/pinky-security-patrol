@@ -114,6 +114,7 @@ class FakePinky(Node):
         p('dock_direction', 'forward')               # backward: contacts at the robot's rear
         p('dock_contact_tolerance', [0.012, 0.015, 5.0])  # along, sideways (m), yaw (deg)
         p('dock_marker_rate', 10.0)
+        p('dock_marker_min_range', 0.06)             # m camera -> marker; closer is too blurry
         p('nav_goal_noise', [0.05, 6.0])             # Nav2-like stop error: m, deg
         p('scenario', [''])                          # ["<seconds> <command>", ...]
         g = lambda name: self.get_parameter(name).value  # noqa: E731
@@ -202,6 +203,7 @@ class FakePinky(Node):
         self.dock_my = dp[1] + side * self.dock_dd * math.sin(dyaw)
         self.dock_myaw = wrap(dyaw if self.dock_backward else dyaw + math.pi)
         self.dock_tol = list(g('dock_contact_tolerance'))
+        self.dock_min_range = g('dock_marker_min_range')
         self.nav_noise = list(g('nav_goal_noise'))
         self.dock_pub = self.create_publisher(PoseStamped, '/perception/dock', 10)
         if self.dock_enabled:
@@ -419,7 +421,9 @@ class FakePinky(Node):
         bearing = wrap(math.atan2(dy, dx) - self.yaw)
         # marker face must point towards the camera (within 60 deg)
         facing = abs(wrap(self.dock_myaw - math.atan2(-dy, -dx)))
-        if not (0.06 < dist < 1.5) or abs(bearing) > self.hfov / 2 - 0.05 or facing > 1.05:
+        cam = dist - 0.035                           # camera is 3.5 cm ahead of the centre
+        if not (self.dock_min_range < cam and dist < 1.5) or abs(bearing) > self.hfov / 2 - 0.05 \
+                or facing > 1.05:
             return
         if self.world and not self.world.line_of_sight(self.x, self.y,
                                                        self.dock_mx, self.dock_my):
