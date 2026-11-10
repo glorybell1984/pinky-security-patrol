@@ -48,6 +48,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from security_interfaces.msg import ObjectDetection, ObjectDetectionArray
 
+from .fake_world import GridWorld
+
 try:  # Pinky's interfaces, to test the real lamp / LCD calls
     from pinky_interfaces.srv import Emotion, SetLamp
 except ImportError:
@@ -85,6 +87,12 @@ class FakePinky(Node):
         p('linear_speed', 0.25)
         p('angular_speed', 1.5)
         p('map_size', [7.0, 5.0])                    # width, height in m
+        # A real map as the world (map_server .yaml): its walls stop the robot, a
+        # grid planner drives around them, the camera cannot see through them.
+        # "" = the built-in room (map_size, two boxes).
+        p('map_yaml', '')
+        p('robot_radius', 0.07)                      # m, collision with the map (Pinky 12x12 cm)
+        p('plan_clearance', 0.15)                    # m, planner keeps this from walls
         p('map_resolution', 0.05)
         p('objects', [7.0, 3.3, 1.0, 3.0, 5.8, 3.4])  # id, x, y triples
         p('carry_path', [4.5, 2.4, 3.5, 2.4, 2.5, 2.4])
@@ -134,6 +142,15 @@ class FakePinky(Node):
             self.objects[int(ob[i])] = FakeObject(int(ob[i]), ob[i + 1], ob[i + 2])
 
         self.boxes = [(2.2, 0.0, 2.5, 1.6), (4.2, 3.6, 4.5, 5.0)]  # x0, y0, x1, y1 walls
+        self.world = None
+        if g('map_yaml'):
+            self.world = GridWorld(g('map_yaml'), g('robot_radius'), g('plan_clearance'))
+            self.boxes = []
+            self.get_logger().info(f"World: {g('map_yaml')} ({self.world.w}x{self.world.h} "
+                                   f"cells, {self.world.res} m)")
+            if self.world.blocked(self.x, self.y):
+                self.get_logger().warn(f'start_pose ({self.x:.2f}, {self.y:.2f}) is not free '
+                                       'in the map: the robot cannot move')
 
         # motion state
         self.goal_token = 0
@@ -217,6 +234,16 @@ class FakePinky(Node):
 
     # ================================================================ world
     def build_map(self):
+        if self.world is not None:
+            msg = OccupancyGrid()
+            msg.header.frame_id = self.global_frame
+            msg.info.resolution = self.world.res
+            msg.info.width, msg.info.height = self.world.w, self.world.h
+            msg.info.origin.position.x = self.world.ox
+            msg.info.origin.position.y = self.world.oy
+            msg.info.origin.orientation.w = 1.0
+            msg.data = self.world.occupancy_list()
+            return msg
         w, h = int(self.map_w / self.res), int(self.map_h / self.res)
         data = [0] * (w * h)
 
@@ -394,6 +421,9 @@ class FakePinky(Node):
         facing = abs(wrap(self.dock_myaw - math.atan2(-dy, -dx)))
         if not (0.06 < dist < 1.5) or abs(bearing) > self.hfov / 2 - 0.05 or facing > 1.05:
             return
+        if self.world and not self.world.line_of_sight(self.x, self.y,
+                                                       self.dock_mx, self.dock_my):
+            return
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'odom'
@@ -405,7 +435,10 @@ class FakePinky(Node):
         self.dock_pub.publish(msg)
 
     def blocked(self, x, y):
-        if x < 0.2 or y < 0.2 or x > self.map_w - 0.2 or y > self.map_h - 0.2:
+        if self.world is not None:
+            if self.world.blocked(x, y):
+                return True
+        elif x < 0.2 or y < 0.2 or x > self.map_w - 0.2 or y > self.map_h - 0.2:
             return True
         if self.dock_enabled:          # the dock body: 20 cm wide, robot front stops at it
             rx, ry, _ = self.in_dock_frame(x, y)
@@ -448,6 +481,17 @@ class FakePinky(Node):
         result = NavigateToPose.Result()
         period = 0.05
         stuck_since = None
+        # with a real map: drive along a planned path around the obstacles
+        route = [(gx, gy)]
+        if self.world is not None:
+            route = self.world.plan(self.x, self.y, gx, gy)
+            if route is None:
+                self.get_logger().warn(f'No path to ({gx:.2f}, {gy:.2f}) in the map')
+                self._navigating = False
+                goal_handle.abort()
+                return result
+            gx, gy = route[-1]
+        leg = 0
 
         try:
             while rclpy.ok():
@@ -457,15 +501,19 @@ class FakePinky(Node):
                 if token != self.goal_token:
                     goal_handle.abort()     # preempted by a newer goal
                     return result
-                dx, dy = gx - self.x, gy - self.y
-                dist = math.hypot(dx, dy)
-                if dist > 0.03:
+                tx, ty = route[leg]
+                if leg < len(route) - 1 and math.hypot(tx - self.x, ty - self.y) < 0.06:
+                    leg += 1                       # next corner of the path
+                    tx, ty = route[leg]
+                dx, dy = tx - self.x, ty - self.y
+                dist = math.hypot(gx - self.x, gy - self.y)
+                if math.hypot(dx, dy) > 0.03:
                     heading = math.atan2(dy, dx)
                     err = wrap(heading - self.yaw)
                     turn = max(-self.ang_speed * period, min(self.ang_speed * period, err))
                     self.yaw = wrap(self.yaw + turn)
                     if abs(err) < 0.35:
-                        stepd = min(self.lin_speed * period, dist)
+                        stepd = min(self.lin_speed * period, math.hypot(dx, dy))
                         nx = self.x + stepd * math.cos(self.yaw)
                         ny = self.y + stepd * math.sin(self.yaw)
                         if self.blocked(nx, ny):
@@ -506,6 +554,8 @@ class FakePinky(Node):
                 dist = math.hypot(dx, dy)
                 bearing = wrap(math.atan2(dy, dx) - self.yaw)
                 if dist > self.detect_range or abs(bearing) > self.hfov / 2.0:
+                    continue
+                if self.world and not self.world.line_of_sight(self.x, self.y, obj.x, obj.y):
                     continue
                 det = ObjectDetection()
                 det.marker_id = obj.marker_id

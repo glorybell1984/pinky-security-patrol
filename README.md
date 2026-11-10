@@ -66,8 +66,14 @@ source install/local_setup.bash
 ## Run without the robot (fake Pinky)
 
 ```bash
-ros2 launch security_bringup fake_robot.launch.xml
+ros2 launch security_bringup fake_robot.launch.xml                 # built-in 7 x 5 m room
+ros2 launch security_bringup fake_robot.launch.xml world:=police   # the real demo arena (police_map)
 ```
+
+`world:=police` loads the SLAM map as the fake world: its walls stop the robot, a planner drives
+around the obstacles, the camera cannot see through walls, and marker 42 is only seen within 0.6 m
+(like the printed 2.7 cm marker). Waypoints, dock and object place there are a draft
+(`config/patrol_fake_police.yaml`, `config/fake_police.yaml`).
 
 Then open the dashboard (next section). The **Fake Pinky** panel on the dashboard acts out
 the scenario: pick up / hide / remove objects, set the battery low or critical.

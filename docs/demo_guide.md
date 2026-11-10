@@ -32,6 +32,27 @@ The fake world is a 7 m x 5 m room with two boxes. Three marked objects:
 
 A lap takes about one minute.
 
+### In the real arena (police_map)
+
+```bash
+ros2 launch security_bringup fake_robot.launch.xml world:=police
+```
+
+Same system, but the world is `maps/police_map.yaml`: walls and obstacles from the
+SLAM map, a grid planner (like Nav2) around them, no detection through walls, marker
+42 seen within 0.6 m only. Draft layout, checked against the map:
+
+| Item | Where (map frame) | File |
+|---|---|---|
+| Dock | robot docked at (0.15, 0.10) facing the bottom wall | `fake_police.yaml` `dock_pose`, `patrol_fake_police.yaml` `charger_pose` |
+| Object #42 | (1.15, 3.70), top end of the corridor | `fake_police.yaml` `objects` |
+| Waypoints | out and back along the corridor, WP3 faces #42 at 0.4 m | `patrol_fake_police.yaml` |
+
+Rehearsal result: dock -> patrol -> #42 level 1 -> pass 2 level 2 hold -> `pickup 42`
+-> level 3 follow -> lost -> patrol -> Go home -> docked, no navigation failures.
+The follow is lost after about 5 s: the robot follows at 0.7 m but the 2.7 cm marker
+is only readable to about 0.6 m (see "What is left").
+
 ### Scenario (about 4 minutes)
 
 | Time | What to do | What happens |
