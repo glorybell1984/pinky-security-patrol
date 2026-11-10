@@ -112,10 +112,14 @@ class DockConfig:
 class DockEstimate:
     """Dock marker pose in the odom frame, filtered."""
 
-    def __init__(self):
+    def __init__(self, yaw_gain=1.0):
         self.x = self.y = self.yaw = None
         self.time = 0.0
         self.count = 0
+        # how much one marker angle reading moves the estimate while driving (1.0 =
+        # designed weights; small = trust the map prior, angle comes from settle())
+        self.yaw_gain = yaw_gain
+        self.samples = deque(maxlen=60)          # raw readings: time, x, y, yaw
 
     def seed(self, x, y, yaw):
         """Prior from the map (dock pose); not counted as a sighting."""
@@ -131,7 +135,7 @@ class DockEstimate:
                 self.yaw = yaw
             self.x, self.y = x, y
             # the angle from far away is noisy: start from the map prior when there is one
-            w = clamp((0.5 - distance) / 0.3, 0.2, 1.0)
+            w = clamp((0.5 - distance) / 0.3, 0.2, 1.0) * self.yaw_gain
             self.yaw = math.atan2((1 - w) * math.sin(self.yaw) + w * math.sin(yaw),
                                   (1 - w) * math.cos(self.yaw) + w * math.cos(yaw))
         else:
@@ -139,11 +143,25 @@ class DockEstimate:
             self.x += a_pos * (x - self.x)
             self.y += a_pos * (y - self.y)
             # trust the angle more when close: ~0.05 at 0.6 m, 0.35 at 0.2 m and nearer
-            a_yaw = clamp(0.05 + (0.6 - distance) * 0.75, 0.05, 0.35)
+            a_yaw = clamp(0.05 + (0.6 - distance) * 0.75, 0.05, 0.35) * self.yaw_gain
             self.yaw = math.atan2((1 - a_yaw) * math.sin(self.yaw) + a_yaw * math.sin(yaw),
                                   (1 - a_yaw) * math.cos(self.yaw) + a_yaw * math.cos(yaw))
         self.count += 1
         self.time = time.monotonic()
+        self.samples.append((self.time, x, y, yaw))
+
+    def lock_robust(self, since):
+        """Replace the estimate by the median of the raw readings taken since
+        `since` (robot standing still): single readings of a small marker can be
+        10-20 deg off, their median is not. Returns the number of readings used."""
+        rows = [r for r in self.samples if r[0] >= since]
+        if not rows:
+            return 0
+        self.x = median(r[1] for r in rows)
+        self.y = median(r[2] for r in rows)
+        m = math.atan2(sum(math.sin(r[3]) for r in rows), sum(math.cos(r[3]) for r in rows))
+        self.yaw = wrap(m + median(wrap(r[3] - m) for r in rows))
+        return len(rows)
 
     def fresh(self, timeout):
         return self.count > 0 and time.monotonic() - self.time < timeout
@@ -460,6 +478,7 @@ class DockingController:
         self._halt()
         c = self.cfg
         start_count = self.est.count
+        since = time.monotonic() + 0.2               # skip readings from the last motion
         end = time.monotonic() + c.settle_time
         while time.monotonic() < end or self.est.count - start_count < c.settle_min_obs:
             if not self._wait_paused(should_stop, is_paused):
@@ -467,6 +486,7 @@ class DockingController:
             if time.monotonic() > end + 1.0:
                 return None                      # marker not seen while standing still
             self._sleep()
+        self.est.lock_robust(since)
         p = self.a.odom_pose()
         if p is None:
             return None

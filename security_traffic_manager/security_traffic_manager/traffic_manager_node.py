@@ -102,6 +102,8 @@ class TrafficManager(Node):
         p('dock_align_lateral_tolerance', 0.006)  # m
         p('dock_align_heading_tolerance_deg', 1.5)
         p('dock_settle_time', 0.6)              # s still before measuring
+        p('dock_settle_min_obs', 4)             # marker readings needed while still
+        p('dock_marker_yaw_gain', 1.0)          # weight of single angle readings while moving
         p('dock_final_speed', 0.05)             # m/s straight run onto the contacts
         # forward: contacts at the front, camera sees the marker to the end.
         # backward: contacts at the rear; align facing the dock, turn 180, reverse in.
@@ -151,10 +153,11 @@ class TrafficManager(Node):
             align_lateral_tolerance=g('dock_align_lateral_tolerance'),
             align_heading_tolerance=math.radians(g('dock_align_heading_tolerance_deg')),
             settle_time=g('dock_settle_time'),
+            settle_min_obs=int(g('dock_settle_min_obs')),
             final_speed=g('dock_final_speed'),
             backward=self.dock_backward,
         )
-        self.dock_est = DockEstimate()
+        self.dock_est = DockEstimate(yaw_gain=g('dock_marker_yaw_gain'))
         self.contact = ContactDetector(g('dock_contact_rise'))
         self.us_range = None
         self.docker = DockingController(self.adapter, self.dock_est, self.contact, self.emit,

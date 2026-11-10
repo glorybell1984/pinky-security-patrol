@@ -59,6 +59,13 @@ traffic_manager:
                                      # when docked (10 cm, all blur). Lower if it stays sharp closer
     dock_align_lateral_tolerance: 0.015    # m; demo dock has no contacts (6 mm for real contacts)
     dock_align_heading_tolerance_deg: 3.0  # simulation at this dock: 40/40, median 14 s
+    # Marker 66 (4 cm) on the real robot: position steady to +-2 mm, single angle
+    # readings jump +-10-20 deg. Stand still 1.5 s and take the median; while
+    # driving, trust the dock direction from the map (AMCL +-5 deg) more than one
+    # reading. Simulation with the measured noise: 33/40 -> 40/40, median 37 -> 19 s
+    dock_settle_time: 1.5
+    dock_settle_min_obs: 12
+    dock_marker_yaw_gain: 0.2
     # Dock direction (docs/docking.md). forward: contacts at the front (default,
     # tested). backward: contacts at the rear; the robot lines up facing the dock,
     # turns 180 deg and reverses in, so the camera watches the room while charging.

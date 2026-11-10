@@ -253,3 +253,17 @@ def test_restage_when_nav2_stops_too_close(monkeypatch):
         if outcome != 'docked' or not contacts_touch(sim.error()) or not restaged or retries:
             failures.append((seed, outcome, restaged, retries))
     assert not failures
+
+
+def test_median_ignores_jumping_marker_angles():
+    """Real Pinky, robot still: single readings of the 4 cm marker jump +-10-20 deg,
+    the median of the readings taken while still does not."""
+    est = DockEstimate(yaw_gain=0.2)
+    rng = random.Random(1)
+    est.seed(0.0, 0.0, math.radians(4.0))                 # map prior, a bit off
+    for k in range(20):
+        jump = rng.choice([0, 0, 0, 10, -10, 20])
+        est.update(0.002 * rng.uniform(-1, 1), 0.0, math.radians(jump), distance=0.5)
+    assert est.lock_robust(0.0) == 20
+    assert abs(math.degrees(est.yaw)) < 3.0
+    assert abs(est.x) < 0.003
