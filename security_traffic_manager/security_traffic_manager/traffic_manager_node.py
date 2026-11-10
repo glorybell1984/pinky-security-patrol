@@ -23,6 +23,7 @@ Subscribes
     /perception/dock        PoseStamped (odom)    dock marker, for docking
     /battery/voltage        Float32, /batt_state BatteryState   charging contact detection
     /us_sensor/range        Range (optional)      ultrasonic stop distance at the dock
+    /imu_raw                Imu (optional)        heading for docking turns (imu_topic)
 """
 import json
 import math
@@ -35,7 +36,8 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from sensor_msgs.msg import BatteryState, Range
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import BatteryState, Imu, Range
 from std_msgs.msg import Float32, String
 from std_srvs.srv import Trigger
 
@@ -101,6 +103,11 @@ class TrafficManager(Node):
         p('dock_align_heading_tolerance_deg', 1.5)
         p('dock_settle_time', 0.6)              # s still before measuring
         p('dock_final_speed', 0.05)             # m/s straight run onto the contacts
+        # forward: contacts at the front, camera sees the marker to the end.
+        # backward: contacts at the rear; align facing the dock, turn 180, reverse in.
+        # charger_pose is the robot pose when docked in both cases.
+        p('dock_direction', 'forward')
+        p('imu_topic', '')                      # e.g. /imu_raw (pinky_imu_bno055): better turns
         p('battery_voltage_topic', '/battery/voltage')
         p('batt_state_topic', '/batt_state')    # pinky_sensor_adc, '' to ignore
         p('us_topic', '/us_sensor/range')
@@ -122,6 +129,13 @@ class TrafficManager(Node):
         self.charger_pose = (float(cp[0]), float(cp[1]), math.radians(float(cp[2])))
         self.charger_retries = int(g('charger_retries'))
         self.dock_enabled = g('dock_enabled')
+        direction = str(g('dock_direction')).strip().lower()
+        if direction not in ('forward', 'backward'):
+            self.get_logger().error(f"dock_direction '{direction}' unknown, using forward")
+            direction = 'forward'
+        self.dock_backward = direction == 'backward'
+        self.imu_yaw = None
+        self.imu_time = 0.0
         self.staging_distance = g('dock_staging_distance')
         self.dock_cfg = DockConfig(
             docked_distance=g('dock_docked_distance'),
@@ -138,13 +152,15 @@ class TrafficManager(Node):
             align_heading_tolerance=math.radians(g('dock_align_heading_tolerance_deg')),
             settle_time=g('dock_settle_time'),
             final_speed=g('dock_final_speed'),
+            backward=self.dock_backward,
         )
         self.dock_est = DockEstimate()
         self.contact = ContactDetector(g('dock_contact_rise'))
         self.us_range = None
         self.docker = DockingController(self.adapter, self.dock_est, self.contact, self.emit,
                                         self.dock_cfg, self.get_us_range,
-                                        g('dock_contact_detect'))
+                                        g('dock_contact_detect'),
+                                        self.get_imu_heading if g('imu_topic') else None)
         self.docked = bool(g('start_docked'))
 
         # state
@@ -173,6 +189,9 @@ class TrafficManager(Node):
                                      10, callback_group=self.cb)
         if g('us_topic'):
             self.create_subscription(Range, g('us_topic'), self.on_us, 10,
+                                     callback_group=self.cb)
+        if g('imu_topic'):
+            self.create_subscription(Imu, g('imu_topic'), self.on_imu, qos_profile_sensor_data,
                                      callback_group=self.cb)
 
         ActionServer(self, Patrol, '/traffic/patrol', self.execute_patrol,
@@ -240,6 +259,19 @@ class TrafficManager(Node):
 
     def on_us(self, msg):
         self.us_range = (msg.range, time.monotonic())
+
+    def on_imu(self, msg):
+        q = msg.orientation
+        if q.w == 0.0 and q.x == 0.0 and q.y == 0.0 and q.z == 0.0:
+            return                                    # no fused orientation yet
+        self.imu_yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                  1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self.imu_time = time.monotonic()
+
+    def get_imu_heading(self):
+        if self.imu_yaw is None or time.monotonic() - self.imu_time > 0.3:
+            return None
+        return self.imu_yaw
 
     def get_us_range(self):
         if self.us_range is None or time.monotonic() - self.us_range[1] > 0.5:
@@ -363,9 +395,10 @@ class TrafficManager(Node):
             self.emit({'event': 'charger_reached', 'message': 'Already on the dock'})
             return
         if self.dock_enabled:
-            # staging point: in front of the dock, facing it
-            sx = x - self.staging_distance * math.cos(yaw)
-            sy = y - self.staging_distance * math.sin(yaw)
+            # staging point: in front of the dock on its centre line, facing it
+            mx, my, face = self.dock_marker_map()
+            d = self.dock_cfg.docked_distance + self.staging_distance
+            sx, sy, yaw = mx + d * math.cos(face), my + d * math.sin(face), face + math.pi
             self.emit({'event': 'returning_to_charger',
                        'message': f'Going home: staging point ({sx:.2f}, {sy:.2f}), then docking'})
         else:
@@ -410,13 +443,20 @@ class TrafficManager(Node):
                        'message': f'{result}: driving to the staging point again'})
             time.sleep(1.0)
 
+    def dock_marker_map(self):
+        """Dock marker pose in the map (x, y, direction its face points), from
+        charger_pose = robot pose when docked. Forward: the robot faces the dock;
+        backward: the robot faces away from it."""
+        x, y, yaw = self.charger_pose
+        dd = self.dock_cfg.docked_distance
+        if self.dock_backward:
+            return x - dd * math.cos(yaw), y - dd * math.sin(yaw), yaw
+        return x + dd * math.cos(yaw), y + dd * math.sin(yaw), yaw + math.pi
+
     def dock_here(self, should_stop):
         """At the staging point: precise docking on the dock marker."""
-        x, y, yaw = self.charger_pose
-        dock_yaw_map = yaw + math.pi                      # dock face points back at the robot
-        mx = x + self.dock_cfg.docked_distance * math.cos(yaw)
-        my = y + self.dock_cfg.docked_distance * math.sin(yaw)
-        prior = self.adapter.map_to_odom(mx, my, dock_yaw_map)
+        mx, my, face = self.dock_marker_map()
+        prior = self.adapter.map_to_odom(mx, my, face)
         self.dock_est.reset()
         if prior is not None:
             self.dock_est.seed(*prior)      # angle prior from the map until the marker is close
@@ -429,6 +469,20 @@ class TrafficManager(Node):
         return outcome
 
     def on_dock_calibrate(self, req, res):
+        if self.dock_backward:
+            # the camera faces away from the dock: only the pose can be recorded
+            if self.adapter.pose is None:
+                res.success = False
+                res.message = 'No robot pose in the map (is localization running?)'
+                return res
+            mx, my, myaw = self.adapter.pose
+            res.success = True
+            res.message = (f'charger_pose: [{mx:.2f}, {my:.2f}, {math.degrees(myaw):.1f}]   '
+                           'dock_docked_distance: measure by hand (backward docking, the '
+                           'camera cannot see the marker): marker face -> robot centre')
+            self.docked = True
+            self.emit({'event': 'dock_calibrated', 'message': res.message})
+            return res
         p = self.adapter.odom_pose()
         if p is None or not self.dock_est.fresh(1.0):
             res.success = False

@@ -54,4 +54,12 @@ traffic_manager:
     dock_predock_distance: 0.0
     dock_align_lateral_tolerance: 0.006    # m
     dock_align_heading_tolerance_deg: 1.5
+    # Dock direction (docs/docking.md). forward: contacts at the front (default,
+    # tested). backward: contacts at the rear; the robot lines up facing the dock,
+    # turns 180 deg and reverses in, so the camera watches the room while charging.
+    # charger_pose is the robot pose when docked either way. For backward, measure
+    # dock_docked_distance by hand and set imu_topic (wheel odometry alone misses
+    # the contacts about 1 time in 4 in simulation).
+    dock_direction: forward
+    imu_topic: ""                  # /imu_raw with pinky_imu_bno055 running on the robot
     start_docked: false              # true if the robot starts on the dock

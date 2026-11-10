@@ -17,6 +17,13 @@ staging point this controller drives with cmd_vel:
     5. CONTACT   stop, wait for charging to be detected (battery voltage rise);
                  nudge 1 cm once; if nothing, back off and try again
 
+Backward docking (backward=True, contacts at the robot's rear): APPROACH and
+ALIGN facing the dock as above, then TURN 180 deg on the spot and reverse onto
+the contacts (FINAL). The camera cannot see the marker while reversing, so the
+turn is the critical part: wheel odometry misjudges a 180 deg turn by a few
+degrees, the IMU (get_heading) does much better. While docked the camera faces
+the room. Leaving the dock is a straight drive forward.
+
 predock_distance = 0 (default) skips ALIGN/FINAL: APPROACH then follows the
 line all the way to the contacts (single-phase). In simulation single-phase is
 faster (median 10 s vs 13-15 s) and as precise, because the marker angle gets
@@ -84,7 +91,14 @@ class DockConfig:
     min_final_distance: float = 0.06  # m, keep at least this much straight run
     rotate_tolerance: float = 0.007  # rad (~0.4 deg), turn-on-the-spot accuracy
     rotate_min_speed: float = 0.12   # rad/s, below this the motors may not turn
+    rotate_max_speed: float = 0.4    # rad/s, small alignment turns
+    turn_speed: float = 1.0          # rad/s, the 180 deg turn (Nav2 uses 1.0 too)
     final_speed: float = 0.05        # m/s, straight run onto the contacts
+    # backward docking (contacts at the rear): always two-phase
+    backward: bool = False
+    # turn on the spot at docked_distance + this (Pinky: 12 x 12 cm, sweeps 8.5 cm);
+    # closer = the marker angle is more precise (simulation: 0.25 m best)
+    turn_clearance: float = 0.10     # m, used if predock_distance is smaller
 
 
 class DockEstimate:
@@ -174,7 +188,7 @@ class ContactDetector:
 class DockingController:
 
     def __init__(self, adapter, estimate, contact, emit, config=None, get_us_range=None,
-                 detect_contact=True):
+                 detect_contact=True, get_heading=None):
         self.a = adapter
         self.est = estimate
         self.contact = contact
@@ -184,6 +198,11 @@ class DockingController:
         self.detect_contact = detect_contact
         self.phase = 'IDLE'
         self.align_error = None          # last ALIGN measurement: x, y, heading err, try
+        # optional absolute heading (rad) from an IMU, None when no fresh reading;
+        # only differences are used, so its zero direction does not matter
+        self.get_heading = get_heading
+        self.imu_ok = get_heading is not None
+        self.facing_away = False         # backward docking: turned away from the dock
         self._v = 0.0
         self._w = 0.0
 
@@ -212,12 +231,22 @@ class DockingController:
             time.sleep(0.1)
         return not should_stop()
 
+    def _heading(self):
+        """(heading, from_imu): IMU heading if available, else odometry."""
+        if self.imu_ok:
+            h = self.get_heading()
+            if h is not None:
+                return h, True
+        p = self.a.odom_pose()
+        return (p[2] if p else None), False
+
     def drive_straight(self, distance, speed, should_stop, is_paused, stop_check=None):
         """Drive straight (negative distance = backwards) measured by odometry.
         stop_check(): optional, True ends the drive early (e.g. ultrasonic)."""
         start = self.a.odom_pose()
         if start is None:
             return False
+        start_h, start_imu = self._heading()
         sign = 1.0 if distance >= 0 else -1.0
         target = abs(distance)
         deadline = time.monotonic() + target / max(speed, 0.01) * 3 + 2.0
@@ -236,16 +265,36 @@ class DockingController:
                 break
             remaining = target - done
             v = sign * clamp(remaining * 1.5, 0.02, speed)
-            # keep the start heading
-            w = clamp(2.0 * wrap(start[2] - p[2]), -0.3, 0.3)
+            # keep the start heading (IMU if it was used at the start, else odometry)
+            h, from_imu = self._heading()
+            if from_imu != start_imu or h is None:
+                start_h, start_imu, h = start[2], False, p[2]
+            w = clamp(2.0 * wrap(start_h - h), -0.3, 0.3)
             self._cmd(v, w)
             self._sleep()
         self._halt()
         return True
 
-    def rotate_to(self, yaw_odom, should_stop, is_paused, timeout=8.0):
+    def rotate_to(self, yaw_odom, should_stop, is_paused):
         """Turn on the spot to an odom-frame heading."""
+        p = self.a.odom_pose()
+        if p is None:
+            return False
+        return self.turn_by(wrap(yaw_odom - p[2]), should_stop, is_paused)
+
+    def turn_by(self, delta, should_stop, is_paused, timeout=12.0, max_speed=None):
+        """Turn on the spot by delta rad (may be +-pi). Measured with the IMU when
+        there is one (odometry misjudges turns by a few %), else odometry. If the
+        IMU turns the other way than the wheels (mounted upside down), it is
+        dropped and odometry is used."""
         c = self.cfg
+        max_speed = max_speed or c.rotate_max_speed
+        h0, use_imu = self._heading()
+        p0 = self.a.odom_pose()
+        if h0 is None or p0 is None:
+            return False
+        prev_h, prev_o = h0, p0[2]
+        turned_h = turned_o = 0.0           # accumulated, so +-pi is no problem
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self._wait_paused(should_stop, is_paused):
@@ -255,10 +304,26 @@ class DockingController:
             if p is None:
                 self._sleep()
                 continue
-            err = wrap(yaw_odom - p[2])
+            turned_o += wrap(p[2] - prev_o)
+            prev_o = p[2]
+            if use_imu:
+                h, from_imu = self._heading()
+                if not from_imu:            # IMU went silent: continue on odometry
+                    use_imu, turned_h = False, turned_o
+                else:
+                    turned_h += wrap(h - prev_h)
+                    prev_h = h
+                    if abs(turned_o) > 0.3 and turned_o * turned_h < 0:
+                        self.imu_ok = use_imu = False
+                        turned_h = turned_o
+                        self.emit({'event': 'dock_imu', 'message':
+                                   'Docking: IMU turns the other way than the wheels, '
+                                   'using odometry (check the IMU mounting)'})
+            turned = turned_h if use_imu else turned_o
+            err = delta - turned
             if abs(err) <= c.rotate_tolerance:
                 break
-            w = clamp(2.0 * err, -0.4, 0.4)
+            w = clamp(2.0 * err, -max_speed, max_speed)
             if abs(w) < c.rotate_min_speed:
                 w = math.copysign(c.rotate_min_speed, err)
             self._cmd(0.0, w)
@@ -386,7 +451,10 @@ class DockingController:
                 return 'lost'
             x, y, herr = m
             self.align_error = (x, y, herr, attempt)
-            if abs(y) <= c.align_lateral_tolerance and abs(herr) <= c.align_heading_tolerance:
+            # backward: the 180 deg turn is computed from the measured heading, so a
+            # heading error here is corrected by the turn; only the line matters
+            heading_ok = c.backward or abs(herr) <= c.align_heading_tolerance
+            if abs(y) <= c.align_lateral_tolerance and heading_ok:
                 return 'aligned'
             if attempt == c.align_corrections:
                 break
@@ -418,6 +486,21 @@ class DockingController:
         return self.drive_straight(x - self.cfg.docked_distance, self.cfg.final_speed,
                                    should_stop, is_paused, stop_check=self._us_hit)
 
+    def final_backward(self, should_stop, is_paused):
+        """Aligned facing the dock: turn 180 deg, reverse onto the contacts."""
+        p = self.a.odom_pose()
+        if p is None:
+            return False
+        x, _, heading = self.est.robot_in_dock(*p)
+        self.phase = 'TURN'
+        self.facing_away = True
+        if not self.turn_by(wrap(0.0 - heading), should_stop, is_paused,
+                            max_speed=self.cfg.turn_speed):
+            return False
+        self.phase = 'FINAL'
+        return self.drive_straight(-(x - self.cfg.docked_distance), self.cfg.final_speed,
+                                   should_stop, is_paused)
+
     def wait_contact(self, should_stop, is_paused):
         self.phase = 'CONTACT'
         if not self.detect_contact:
@@ -431,7 +514,8 @@ class DockingController:
                 return True
             if not nudged and time.monotonic() - start > self.cfg.contact_timeout / 2:
                 nudged = True
-                self.drive_straight(self.cfg.nudge, 0.02, should_stop, is_paused)
+                nudge = -self.cfg.nudge if self.cfg.backward else self.cfg.nudge
+                self.drive_straight(nudge, 0.02, should_stop, is_paused)
             self._halt()
             time.sleep(0.1)
         return False
@@ -440,11 +524,19 @@ class DockingController:
         """Returns 'docked', 'aborted' or 'failed: <reason>'."""
         c = self.cfg
         reason = 'unknown'
+        self.facing_away = False
         for attempt in range(c.retries + 1):
             if attempt:
                 self.emit({'event': 'dock_retry',
                            'message': f'Docking: {reason}, backing off (try {attempt + 1})'})
-                if not self.drive_straight(-c.backoff, 0.06, should_stop, is_paused):
+                if self.facing_away:
+                    # backward docking failed: drive away, turn to see the marker again
+                    if not (self.drive_straight(c.backoff, 0.06, should_stop, is_paused)
+                            and self.turn_by(math.pi, should_stop, is_paused,
+                                             max_speed=c.turn_speed)):
+                        return 'aborted'
+                    self.facing_away = False
+                elif not self.drive_straight(-c.backoff, 0.06, should_stop, is_paused):
                     return 'aborted'
                 self.est.reset()
             if not self.acquire(should_stop, is_paused):
@@ -453,9 +545,11 @@ class DockingController:
                 reason = 'dock marker not found'
                 continue
             self.contact.mark()
-            two_phase = c.predock_distance > c.docked_distance + c.min_final_distance
-            result = self.approach(should_stop, is_paused,
-                                   c.predock_distance if two_phase else None)
+            predock = c.predock_distance
+            if c.backward:
+                predock = max(predock, c.docked_distance + c.turn_clearance)
+            two_phase = predock > c.docked_distance + c.min_final_distance
+            result = self.approach(should_stop, is_paused, predock if two_phase else None)
             if result == 'arrived' and two_phase:
                 self.align_error = None
                 result = self.align(should_stop, is_paused)
@@ -466,7 +560,8 @@ class DockingController:
                                f'{y * 1000:+.0f} mm, heading {math.degrees(herr):+.1f} deg, '
                                f'{tries} correction(s))'})
                 if result == 'aligned':
-                    result = 'arrived' if self.final(should_stop, is_paused) else 'aborted'
+                    final = self.final_backward if c.backward else self.final
+                    result = 'arrived' if final(should_stop, is_paused) else 'aborted'
             if result == 'aborted':
                 return 'aborted'
             if result != 'arrived':
@@ -482,8 +577,10 @@ class DockingController:
         return f'failed: {reason}'
 
     def undock(self, should_stop, is_paused):
+        """Leave the dock: reverse out (forward docking) or drive out (backward)."""
         self.phase = 'UNDOCK'
-        ok = self.drive_straight(-self.cfg.undock_distance, self.cfg.undock_speed,
-                                 should_stop, is_paused)
+        d = self.cfg.undock_distance if self.cfg.backward else -self.cfg.undock_distance
+        ok = self.drive_straight(d, self.cfg.undock_speed, should_stop, is_paused)
+        self.facing_away = False
         self.phase = 'IDLE'
         return ok

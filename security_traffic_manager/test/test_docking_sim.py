@@ -27,9 +27,17 @@ class Sim:
     """True robot pose (dock frame: marker at the origin facing +x), its odometry,
     and a camera that sees the marker. Also stands in for the clock."""
 
-    def __init__(self, x, y, yaw, est, rng, slip=0.03, rate=10.0):
+    def __init__(self, x, y, yaw, est, rng, slip=0.03, rate=10.0, imu_scale_error=None,
+                 backward=False):
         self.t = 0.0
+        self.backward = backward
         self.true = [x, y, yaw]
+        # IMU: turns measured with a small scale error (BNO055 gyro: ~1 %) and noise;
+        # its zero direction is arbitrary (only differences may be used)
+        self.imu_scale = None
+        if imu_scale_error is not None:
+            self.imu_scale = 1.0 + rng.uniform(-imu_scale_error, imu_scale_error)
+        self.imu_yaw = 0.7
         self.odom = [x, y, yaw]          # odom starts aligned with the truth
         self.cmd = (0.0, 0.0)
         self.est = est
@@ -55,6 +63,9 @@ class Sim:
     def odom_pose(self):
         return tuple(self.odom)
 
+    def imu_heading(self):
+        return wrap(self.imu_yaw + self.rng.gauss(0, math.radians(0.1)))
+
     # --- simulation
     def _step(self, dt):
         v, w = self.cmd
@@ -64,6 +75,8 @@ class Sim:
         self.odom = [ox + v * math.cos(oyaw) * dt, oy + v * math.sin(oyaw) * dt, oyaw]
         tx, ty, tyaw = self.true
         tyaw = wrap(tyaw + w * self.ang_scale * dt)
+        if self.imu_scale is not None:
+            self.imu_yaw = wrap(self.imu_yaw + w * self.ang_scale * self.imu_scale * dt)
         nx = tx + v * self.lin_scale * math.cos(tyaw) * dt
         ny = ty + v * self.lin_scale * math.sin(tyaw) * dt
         if -0.05 < nx < DOCKED - 0.004 and abs(ny) < 0.10:   # dock body stops the robot
@@ -99,10 +112,11 @@ class Sim:
     def error(self):
         """True docked error: along, sideways, heading."""
         x, y, yaw = self.true
-        return x - DOCKED, y, wrap(math.pi - yaw)
+        return x - DOCKED, y, wrap((0.0 if self.backward else math.pi) - yaw)
 
 
-def run_dock(seed, cfg, nav_error=(0.15, math.radians(14.0)), monkeypatch=None):
+def run_dock(seed, cfg, nav_error=(0.15, math.radians(14.0)), monkeypatch=None,
+             imu_scale_error=None):
     rng = random.Random(seed)
     est = DockEstimate()
     # Nav2 stops near the staging point (0.6 m in front of the docked pose)
@@ -110,12 +124,13 @@ def run_dock(seed, cfg, nav_error=(0.15, math.radians(14.0)), monkeypatch=None):
     x = DOCKED + 0.6 + rng.uniform(-e_pos, e_pos) * 0.5
     y = rng.uniform(-e_pos, e_pos)
     yaw = math.pi + rng.uniform(-e_yaw, e_yaw)
-    sim = Sim(x, y, yaw, est, rng)
+    sim = Sim(x, y, yaw, est, rng, imu_scale_error=imu_scale_error, backward=cfg.backward)
     est.seed(0.0, 0.0, math.radians(rng.uniform(-3, 3)))   # map prior, a bit off
     monkeypatch.setattr(dc, 'time', sim)
     events = []
     ctl = DockingController(sim, est, ContactDetector(), events.append, cfg,
-                            detect_contact=False)
+                            detect_contact=False,
+                            get_heading=sim.imu_heading if sim.imu_scale else None)
     outcome = ctl.dock(lambda: False, lambda: False)
     return outcome, sim, events
 
@@ -162,3 +177,55 @@ def test_final_run_needs_no_marker(monkeypatch):
     monkeypatch.setattr(DockingController, 'final', final_blind)
     outcome, sim, _ = run_dock(3, cfg, monkeypatch=monkeypatch)
     assert outcome == 'docked' and contacts_touch(sim.error())
+
+
+# ---------------------------------------------------------------- backward docking
+def test_backward_with_imu_reaches_the_contacts(monkeypatch):
+    """Align facing the dock, turn 180 deg on the IMU, reverse in."""
+    cfg = DockConfig(docked_distance=DOCKED, backward=True)
+    failures = []
+    for seed in range(20):
+        outcome, sim, _ = run_dock(seed, cfg, monkeypatch=monkeypatch, imu_scale_error=0.01)
+        if outcome != 'docked' or not contacts_touch(sim.error()):
+            failures.append((seed, outcome, [round(v, 4) for v in sim.error()]))
+    assert not failures
+
+
+def test_backward_ends_facing_away_and_undocks_forward(monkeypatch):
+    cfg = DockConfig(docked_distance=DOCKED, backward=True)
+    outcome, sim, _ = run_dock(5, cfg, monkeypatch=monkeypatch, imu_scale_error=0.01)
+    assert outcome == 'docked'
+    assert abs(wrap(sim.true[2])) < math.radians(5)        # camera looks into the room
+    x_docked = sim.true[0]
+    est = DockEstimate()
+    ctl = DockingController(sim, est, ContactDetector(), lambda e: None, cfg,
+                            detect_contact=False)
+    assert ctl.undock(lambda: False, lambda: False)
+    assert sim.true[0] - x_docked > cfg.undock_distance - 0.03   # drove out forward
+
+
+def test_turn_by_half_turn_with_imu(monkeypatch):
+    """A 180 deg turn crosses +-pi: measured by accumulating, not by wrapping."""
+    rng = random.Random(0)
+    est = DockEstimate()
+    sim = Sim(0.5, 0.0, math.pi - 0.05, est, rng, slip=0.0, imu_scale_error=0.0)
+    monkeypatch.setattr(dc, 'time', sim)
+    ctl = DockingController(sim, est, ContactDetector(), lambda e: None,
+                            DockConfig(), get_heading=sim.imu_heading)
+    assert ctl.turn_by(math.pi, lambda: False, lambda: False, max_speed=1.0)
+    assert abs(wrap(sim.true[2] - (math.pi - 0.05 + math.pi))) < math.radians(1.0)
+
+
+def test_imu_turning_the_wrong_way_is_dropped(monkeypatch):
+    """IMU mounted upside down (yaw sign flipped): fall back to odometry."""
+    rng = random.Random(0)
+    est = DockEstimate()
+    sim = Sim(0.5, 0.0, 0.0, est, rng, slip=0.0, imu_scale_error=0.0)
+    monkeypatch.setattr(dc, 'time', sim)
+    events = []
+    ctl = DockingController(sim, est, ContactDetector(), events.append, DockConfig(),
+                            get_heading=lambda: -sim.imu_heading())
+    assert ctl.turn_by(math.pi / 2, lambda: False, lambda: False)
+    assert abs(wrap(sim.true[2] - math.pi / 2)) < math.radians(1.0)
+    assert not ctl.imu_ok
+    assert any(e['event'] == 'dock_imu' for e in events)

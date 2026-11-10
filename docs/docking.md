@@ -77,6 +77,50 @@ Tests: `security_traffic_manager/test/test_docking_sim.py` runs the real
 controller against a simulated robot, camera and dock on a fake clock
 (both modes, 20 dockings each, in under a second).
 
+## Backward docking (option)
+
+`dock_direction: backward` puts the contacts at the robot's **rear**. While
+charging, the camera then faces the room and keeps reporting objects, and
+leaving the dock is a straight drive forward.
+
+```
+staging ──> approach facing the marker ──> ALIGN at docked + 10 cm ──> TURN 180° ──> reverse in
+                                            (sideways error only)       (IMU)        (odometry, no marker)
+```
+
+The camera cannot see the marker while reversing, so the **180° turn decides
+the result**: a heading error of e.g. 5° becomes about 2 cm sideways after 20 cm
+of reversing. Wheel odometry misjudges turns by a few percent, the BNO055 IMU by
+about 1 %. The turn is computed from the heading measured at the pre-dock point,
+so a heading error there is corrected by the turn; only the sideways error has
+to be within `dock_align_lateral_tolerance`.
+
+| 50 dockings, Nav2 error ±15 cm / ±14°, 3 % wheel slip | Contacts | Max sideways | Max heading | Median time | Worst |
+|---|---|---|---|---|---|
+| Forward (default) | 50/50 | 6 mm | 2.0° | 10 s | 20 s |
+| Backward, IMU (1 % turn error) | 50/50 | 10 mm | 3.2° | 17 s | 40 s |
+| Backward, IMU (2 % turn error) | 50/50 | 12 mm | 4.5° | 17 s | 46 s |
+| Backward, wheel odometry only | 43/50 | 16 mm | 6.5° | 17 s | 39 s |
+
+Contacts were counted as touching within ±12 mm along, ±15 mm sideways and ±5°,
+the same as Fake Pinky. Backward has less margin, so the V-shaped guide and wide
+pads are worth building for it.
+
+**Setup:**
+1. Run the IMU on the robot: `ros2 run pinky_imu_bno055 main_node`, check
+   `ros2 topic echo /imu_raw --once` (orientation not all zero).
+2. `patrol.yaml`: `dock_direction: backward`, `imu_topic: /imu_raw`.
+3. Put the robot on the dock (rear contacts touching) and call
+   `/traffic/dock_calibrate`: it gives `charger_pose`. The camera cannot see the
+   marker from there, so measure `dock_docked_distance` by hand: marker face to
+   the robot's centre (`base_footprint`, middle of the wheel axle).
+4. If the IMU is mounted so that it turns the other way than the wheels, the
+   dashboard log says `IMU turns the other way than the wheels` and odometry is used.
+
+The pre-dock point is `dock_docked_distance` + 10 cm (Pinky is 12 x 12 cm and
+needs about 8.5 cm to turn on the spot). Closer is better: the marker angle is
+more precise there (0.25 m: max 10 mm sideways; 0.35 m: 15 mm).
+
 ## Fake Pinky results
 
 | Test | Result |

@@ -103,6 +103,7 @@ class FakePinky(Node):
         p('dock_enabled', True)
         p('dock_pose', [0.5, 2.0, 180.0])            # robot pose when docked (x, y, yaw_deg)
         p('dock_docked_distance', 0.15)              # marker -> robot base when docked
+        p('dock_direction', 'forward')               # backward: contacts at the robot's rear
         p('dock_contact_tolerance', [0.012, 0.015, 5.0])  # along, sideways (m), yaw (deg)
         p('dock_marker_rate', 10.0)
         p('nav_goal_noise', [0.05, 6.0])             # Nav2-like stop error: m, deg
@@ -176,10 +177,13 @@ class FakePinky(Node):
         dp = list(g('dock_pose'))
         self.dock_dd = g('dock_docked_distance')
         dyaw = math.radians(dp[2])
-        # marker sits docked_distance ahead of the docked robot, its face pointing back
-        self.dock_mx = dp[0] + self.dock_dd * math.cos(dyaw)
-        self.dock_my = dp[1] + self.dock_dd * math.sin(dyaw)
-        self.dock_myaw = wrap(dyaw + math.pi)
+        # marker: docked_distance ahead of the docked robot (behind it when backward)
+        self.dock_backward = str(g('dock_direction')).lower() == 'backward'
+        # dock_pose = robot pose when docked: facing the dock, or away from it
+        side = -1.0 if self.dock_backward else 1.0
+        self.dock_mx = dp[0] + side * self.dock_dd * math.cos(dyaw)
+        self.dock_my = dp[1] + side * self.dock_dd * math.sin(dyaw)
+        self.dock_myaw = wrap(dyaw if self.dock_backward else dyaw + math.pi)
         self.dock_tol = list(g('dock_contact_tolerance'))
         self.nav_noise = list(g('nav_goal_noise'))
         self.dock_pub = self.create_publisher(PoseStamped, '/perception/dock', 10)
@@ -378,7 +382,8 @@ class FakePinky(Node):
     def contacts_touch(self):
         rx, ry, h = self.in_dock_frame(self.x, self.y, self.yaw)
         return (abs(rx - self.dock_dd) <= self.dock_tol[0] and abs(ry) <= self.dock_tol[1]
-                and abs(wrap(h - math.pi)) <= math.radians(self.dock_tol[2]))
+                and abs(wrap(h - (0.0 if self.dock_backward else math.pi)))
+                <= math.radians(self.dock_tol[2]))
 
     def publish_dock(self):
         """What perception would publish: marker pose in odom (= map here) with noise."""

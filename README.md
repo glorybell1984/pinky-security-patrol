@@ -20,7 +20,8 @@ The whole system also runs on a **fake Pinky** (simulated robot and world) for t
 | Escalation | Level 1 report -> level 2 hold (robot turns to the object, red lamp blinks) -> level 3 follow (0.7 m) |
 | Lost / removed | Follow ends at the last seen position; an object missing from its spot is marked REMOVED |
 | Battery | Low 7.0 V: finish the follow, go home. Critical 6.8 V: stop and go home now |
-| Home dock | Nav2 to a staging point, then marker-guided precise docking onto charging contacts, undock, resume patrol |
+| Home dock | Nav2 to a staging point, then marker-guided precise docking onto charging contacts, undock, resume patrol | 
+| Dock options | Two-phase (align, then straight in) and backward docking (camera watches the room while charging), off by default ([docking.md](docs/docking.md)) |
 | Robot signals | Front lamp (`/set_lamp`) and LCD face (`/set_emotion`) follow the robot state |
 | Operator | Dashboard: map, object registry, event log, camera, start / stop / pause / go home / emergency stop |
 | Logs | `~/patrol_logs/events_<time>.csv`, every decision with positions |
@@ -172,7 +173,7 @@ ros2 topic pub --once /fake_pinky/command std_msgs/msg/String "{data: 'pickup 7'
 ```bash
 cd ~/patrol_ws/src/pinky-security-patrol
 python3 -m pytest security_task_manager/test       # registry + battery (21 tests)
-python3 -m pytest security_traffic_manager/test    # docking math + closed-loop docking (9 tests)
+python3 -m pytest security_traffic_manager/test    # docking math + closed-loop docking (13 tests)
 ```
 
 ## Status
