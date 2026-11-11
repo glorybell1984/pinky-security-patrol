@@ -89,7 +89,7 @@ ros2 run pinky_emotion emotion_server              # optional, LCD faces
 python3 ~/camera_publisher.py                      # copy it once, see docs/demo_guide.md
 
 # ---- Laptop
-ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map.yaml \
+ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map2.yaml \
     params_file:=$(ros2 pkg prefix security_bringup)/share/security_bringup/config/nav2_arena.yaml
 ros2 launch pinky_navigation nav2_view.launch.xml  # RViz: 2D Pose Estimate first
 ros2 launch security_bringup patrol_system.launch.xml

@@ -5,13 +5,12 @@ import random
 
 from security_bringup.fake_world import GridWorld
 
-MAP = os.path.join(os.path.dirname(__file__), '..', 'maps', 'police_map.yaml')
+MAP = os.path.join(os.path.dirname(__file__), '..', 'maps', 'police_map2.yaml')
 # patrol_fake_police.yaml waypoints and dock
-WPS = [(0.50, 0.45, 0), (1.00, 1.50, 90), (1.05, 3.30, 90),
-       (0.60, 3.35, 180), (1.00, 2.20, -90), (0.95, 0.80, -90)]
-DOCKED = (0.01, 0.10)          # real dock (RViz clicks), robot faces the left wall
-STAGING = (0.61, 0.13)         # 0.6 m in front of the docked pose
-OBJECT_42 = (1.15, 3.70)
+WPS = [(-2.14, -0.03, -33.9), (-1.14, 0.56, 56.1), (-0.09, 2.03, 56.1), (-0.44, 2.32, 146.1), (-0.75, 1.14, -123.9), (-1.57, 0.01, -123.9)]
+DOCKED = (-2.74, -0.05)          # real dock (RViz clicks), robot faces the left wall
+STAGING = (-2.24, -0.39)         # 0.6 m in front of the docked pose
+OBJECT_42 = (0.21, 2.30)
 
 
 def wrap(a):
@@ -20,8 +19,8 @@ def wrap(a):
 
 def test_map_loads_like_map_server():
     g = GridWorld(MAP)
-    assert (g.w, g.h, g.res) == (135, 161, 0.05)
-    assert g.data.count(0) == 2826 and g.data.count(100) == 525   # same as nav2 map_server
+    assert (g.w, g.h, g.res) == (179, 291, 0.05)
+    assert g.data.count(0) == 4841 and g.data.count(100) == 701   # same as nav2 map_server
 
 
 def test_draft_points_are_free_and_connected():
@@ -35,8 +34,8 @@ def test_draft_points_are_free_and_connected():
 
 def test_walls_block_the_camera():
     g = GridWorld(MAP)
-    assert g.line_of_sight(1.05, 3.30, *OBJECT_42)        # object seen from WP3
-    assert not g.line_of_sight(0.6, 2.0, 0.6, -0.5)       # not through the bottom wall
+    assert g.line_of_sight(-0.09, 2.03, *OBJECT_42)        # object seen from WP3
+    assert not g.line_of_sight(-1.19, 1.20, -2.59, -0.88)       # not through the bottom wall
 
 
 def drive(g, st, gx, gy, gyaw, rng, noise=0.05):
@@ -77,6 +76,6 @@ def test_patrol_laps_never_get_stuck():
     """Paths keep a margin: Nav2-like stop errors and turning never end in a wall."""
     g = GridWorld(MAP)
     rng = random.Random(0)
-    st = [0.15, 0.45, -math.pi / 2]
+    st = [-2.43, 0.16, -2.162]
     results = [drive(g, st, x, y, math.radians(yaw), rng) for _ in range(10) for x, y, yaw in WPS]
     assert results.count('ok') == len(results), {r: results.count(r) for r in set(results)}

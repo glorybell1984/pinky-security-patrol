@@ -21,7 +21,7 @@
 #   goal heading tolerance 14 -> 9 deg
 #   inflation 0.15 -> 0.20 m (both costmaps) (x2)
 #
-# ros2 launch pinky_navigation bringup_launch.xml map:=<police_map.yaml> \
+# ros2 launch pinky_navigation bringup_launch.xml map:=<police_map2.yaml> \
 #     params_file:=$(ros2 pkg prefix security_bringup)/share/security_bringup/config/nav2_arena.yaml
 
 amcl:

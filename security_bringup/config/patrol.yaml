@@ -2,9 +2,9 @@
 # Waypoints are flat x, y, yaw_deg triples in the map frame. All values must be
 # written with a decimal point (0.0, not 0) or ROS rejects the list type.
 #
-# Map: maps/police_map.yaml (arena about x -0.2 .. 1.5, y -0.1 .. 4.0).
-# Waypoints and charger_pose: DRAFT from the map's free space, the same layout
-# rehearsed on Fake Pinky (fake_robot.launch.xml world:=police). Check them on
+# Map: maps/police_map2.yaml (SLAM, 2026-11-11, dock in place; arena runs diagonally).
+# Waypoints and charger_pose: the layout rehearsed on Fake Pinky, converted from
+# police_map (rotate -33.85 deg, shift -2.805, -0.130; walls agree to 98 % within 10 cm). Check them on
 # the robot and move them if needed:
 #   RViz -> Publish Point -> click -> ros2 topic echo /clicked_point --once
 traffic_manager:
@@ -17,13 +17,13 @@ traffic_manager:
     lamp_service: /set_lamp        # pinky_lamp_control on the robot, "" to disable
     emotion_service: /set_emotion  # pinky_emotion LCD faces, "" to disable
     cmd_vel_topic: ""              # default: <namespace>/cmd_vel
-    # The arena is one corridor (x 0.7-1.2) with open ends: out and back.
-    waypoints: [0.50, 0.45, 0.0,       # WP1 bottom, near the dock
-                1.00, 1.50, 90.0,      # WP2 up the corridor
-                1.05, 3.30, 90.0,      # WP3 top end (draft place of object 42, 0.4 m ahead)
-                0.60, 3.35, 180.0,     # WP4 top left
-                1.00, 2.20, -90.0,     # WP5 back down
-                0.95, 0.80, -90.0]     # WP6
+    # The arena is one diagonal corridor with open ends: out and back.
+    waypoints: [-2.14, -0.03, -33.9,    # WP1 near the dock
+                -1.14, 0.56, 56.1,      # WP2 up the corridor
+                -0.09, 2.03, 56.1,      # WP3 far end (object 42 draft place, 0.4 m ahead)
+                -0.44, 2.32, 146.1,     # WP4 far corner
+                -0.75, 1.14, -123.9,    # WP5 back
+                -1.57, 0.01, -123.9]    # WP6
     nav_retry: 1
     waypoint_pause: 1.0            # s, look around a moment at each waypoint
     pose_timeout: 3.0
@@ -33,7 +33,7 @@ traffic_manager:
     # Where the robot waits to be charged (x, y, yaw_deg in the map frame). Pick a
     # free spot next to a power socket; the robot drives there on low battery.
     # TODO(demo): set from RViz Publish Point, like the waypoints.
-    charger_pose: [0.01, 0.10, 180.0]  # robot pose WHEN DOCKED (RViz clicks): left wall, facing it
+    charger_pose: [-2.74, -0.05, 146.1]  # robot pose WHEN DOCKED (converted; refine from the marker)
     charger_retries: 3
 
     # Dock with charging contacts (docs/docking.md). Calibrate: put the robot on

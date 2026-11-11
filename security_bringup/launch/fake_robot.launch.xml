@@ -10,7 +10,7 @@
 -->
 <launch>
   <arg name="rosbridge" default="true"/>
-  <arg name="world" default="room" description="room: built-in room, police: maps/police_map.yaml"/>
+  <arg name="world" default="room" description="room: built-in room, police: maps/police_map2.yaml"/>
   <let name="config_dir" value="$(find-pkg-share security_bringup)/config"/>
   <let name="police" value="$(eval '\'$(var world)\' == \'police\'')"/>
 
@@ -33,7 +33,7 @@
   <group if="$(var police)">
     <node pkg="security_bringup" exec="fake_pinky" output="screen">
       <param from="$(var config_dir)/fake_police.yaml"/>
-      <param name="map_yaml" value="$(find-pkg-share security_bringup)/maps/police_map.yaml"/>
+      <param name="map_yaml" value="$(find-pkg-share security_bringup)/maps/police_map2.yaml"/>
     </node>
     <node pkg="security_traffic_manager" exec="traffic_manager" output="screen">
       <param from="$(var config_dir)/patrol_fake_police.yaml"/>
