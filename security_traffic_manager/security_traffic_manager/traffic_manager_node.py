@@ -72,6 +72,7 @@ class TrafficManager(Node):
         p('lamp_topic', '/fleet/lamp')
         p('lamp_service', '/set_lamp')          # pinky_lamp_control, '' to disable
         p('emotion_service', '/set_emotion')    # pinky_emotion LCD faces, '' to disable
+        p('led_service', '/set_led')            # pinky_led ring (police lights), '' to disable
         p('cmd_vel_topic', '')
         p('waypoints', [0.0, 0.0, 0.0])
         p('nav_retry', 1)
@@ -124,7 +125,8 @@ class TrafficManager(Node):
         self.waypoints = parse_waypoints(list(g('waypoints')))
         self.adapter = RobotAdapter(self, g('namespace'), g('base_frame'), g('global_frame'),
                                     g('lamp_topic'), g('cmd_vel_topic'), self.cb,
-                                    g('lamp_service'), g('emotion_service'), g('odom_frame'))
+                                    g('lamp_service'), g('emotion_service'), g('odom_frame'),
+                                    g('led_service'))
         self.patrol = PatrolExecutor(self.adapter, self.waypoints, self.emit,
                                      g('nav_retry'), g('waypoint_pause'))
         self.follow = FollowController(self.adapter, self.get_detection, self.emit,

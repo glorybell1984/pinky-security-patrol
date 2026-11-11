@@ -152,7 +152,7 @@ turn 180° and reverse on odometry alone; that is not implemented.
 
 1. Build the dock and put it against a wall, free space of about 1 m in front of it.
 2. Put the robot on the dock by hand, contacts touching. Start bringup, Nav2,
-   `camera_publisher.py` and `patrol_system.launch.xml`.
+   `camera_server.py` and `patrol_system.launch.xml`.
 3. Calibrate:
    ```bash
    ros2 service call /traffic/dock_calibrate std_srvs/srv/Trigger

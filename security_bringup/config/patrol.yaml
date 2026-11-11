@@ -16,6 +16,7 @@ traffic_manager:
     lamp_topic: /fleet/lamp        # mode for the dashboard (OFF / BLINK / ON)
     lamp_service: /set_lamp        # pinky_lamp_control on the robot, "" to disable
     emotion_service: /set_emotion  # pinky_emotion LCD faces, "" to disable
+    led_service: /set_led          # pinky_led ring: police lights on level 3, "" to disable
     cmd_vel_topic: ""              # default: <namespace>/cmd_vel
     # The arena is one diagonal corridor with open ends: out and back.
     waypoints: [-2.14, -0.03, -33.9,    # WP1 near the dock
@@ -24,6 +25,15 @@ traffic_manager:
                 -0.44, 2.32, 146.1,     # WP4 far corner
                 -0.75, 1.14, -123.9,    # WP5 back
                 -1.57, 0.01, -123.9]    # WP6
+    # Alternative: JW's 8-point route (dev-jw), converted to police_map2 (all free, all legs plannable):
+    # waypoints: [-2.43, 0.21, -75.9,
+    #             -2.31, -0.24, 2.1,
+    #             -1.65, -0.22, 55.1,
+    #             -1.15, 0.51, 62.1,
+    #             -0.73, 1.29, -11.9,
+    #             -0.47, 1.23, 85.1,
+    #             -0.40, 2.15, 2.1,
+    #             -0.18, 2.15, -138.9]
     nav_retry: 1
     waypoint_pause: 1.0            # s, look around a moment at each waypoint
     pose_timeout: 3.0

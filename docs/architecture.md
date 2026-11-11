@@ -48,7 +48,9 @@ Commands flow down (UI -> task manager -> traffic manager -> robot). Status flow
 | `/fleet/lamp` | `std_msgs/String` OFF/ON/BLINK | traffic manager -> dashboard |
 | `/set_lamp` | `pinky_interfaces/SetLamp` | traffic manager -> `pinky_lamp_control` (robot) |
 | `/set_emotion` | `pinky_interfaces/Emotion` | traffic manager -> `pinky_emotion` LCD (robot) |
-| `/camera/image_raw/compressed` | `CompressedImage` | `camera_publisher.py` (robot) -> perception |
+| `http://<robot>:5000/video_feed` | MJPEG over HTTP | `camera_server.py` (robot) -> perception, dashboard live view |
+| `/perception/stream_url` | `std_msgs/String` | perception -> dashboard |
+| `/camera/image_raw/compressed` | `CompressedImage` | `camera_publisher.py` (robot, optional `image_source: ros`) -> perception |
 | TF `map -> suspicious_object_<id>` | static TF | task manager -> RViz |
 
 ## Object states
@@ -73,6 +75,7 @@ All thresholds are in `security_bringup/config/rules.yaml`.
 
 | Decision | Why |
 |---|---|
+| Camera over HTTP (Flask MJPEG), not ROS topics | Over Wi-Fi a lost UDP packet drops a whole ROS image; one TCP stream just slows down (Pinky teacher's advice) |
 | Pose from TF (`map -> base_footprint`), not `/amcl_pose` | AMCL only publishes after the robot moves; TF is always current |
 | Perception publishes every frame, even empty | The task manager needs "nothing seen here" to decide REMOVED |
 | Distance: LiDAR at the marker's bearing, or marker size | No camera calibration needed; `auto` falls back when the LiDAR hits something else |

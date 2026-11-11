@@ -17,9 +17,9 @@ from tf2_ros import Buffer, TransformException, TransformListener
 # Pinky's own interfaces (github.com/pinklab-art/pinky_pro). Optional: when the
 # pinky_pro workspace is not sourced, the lamp mode is only published as a String.
 try:
-    from pinky_interfaces.srv import Emotion, SetLamp
+    from pinky_interfaces.srv import Emotion, SetLamp, SetLed
 except ImportError:  # pragma: no cover
-    Emotion = SetLamp = None
+    Emotion = SetLamp = SetLed = None
 
 # Our lamp mode -> pinky_lamp_control request.
 # SetLamp.mode: 0 off, 1 on, 2 blink, 3 dimming. time: ms per blink / dimming half cycle.
@@ -30,6 +30,17 @@ LAMP_STYLES = {
     'LOW':   {'rgb': (1.0, 0.6, 0.0), 'mode': 2, 'time': 800},   # low battery, going to charge
     'CHARGE': {'rgb': (0.0, 1.0, 0.2), 'mode': 3, 'time': 3000},  # at the charger: green
 }
+# Our lamp mode -> LED ring (pinky_led, 8 pixels). 'POLICE' = red/blue halves
+# swapping 4 times a second (JW's police lights from dev-jw).
+LED_RING = {
+    'OFF': (0, 0, 120),       # patrolling: dim blue
+    'BLINK': (255, 0, 0),     # level 2 hold: red
+    'ON': 'POLICE',           # level 3 follow: police lights
+    'LOW': (255, 120, 0),     # going home on low battery: amber
+    'CHARGE': (0, 160, 0),    # docked: green
+}
+LED_LEFT, LED_RIGHT = [0, 1, 2, 3], [4, 5, 6, 7]
+
 # Our lamp mode -> pinky_emotion face on the LCD.
 EMOTIONS = {'OFF': 'basic', 'BLINK': 'angry', 'ON': 'interest', 'LOW': 'sad',
             'CHARGE': 'bored'}
@@ -48,7 +59,8 @@ class RobotAdapter:
 
     def __init__(self, node, namespace='', base_frame='base_footprint', global_frame='map',
                  lamp_topic='/fleet/lamp', cmd_vel_topic='', callback_group=None,
-                 lamp_service='/set_lamp', emotion_service='/set_emotion', odom_frame='odom'):
+                 lamp_service='/set_lamp', emotion_service='/set_emotion', odom_frame='odom',
+                 led_service='/set_led'):
         self.node = node
         ns = namespace.rstrip('/')
         self.global_frame = global_frame
@@ -60,6 +72,13 @@ class RobotAdapter:
 
         self.lamp_client = None
         self.emotion_client = None
+        self.led_client = None
+        self._led_sent = None
+        self._police_phase = False
+        if SetLed is not None and led_service:
+            self.led_client = node.create_client(SetLed, led_service,
+                                                 callback_group=callback_group)
+            node.create_timer(0.25, self._led_tick, callback_group=callback_group)
         if SetLamp is not None and lamp_service:
             self.lamp_client = node.create_client(SetLamp, lamp_service,
                                                   callback_group=callback_group)
@@ -235,10 +254,35 @@ class RobotAdapter:
             self.emotion_client.call_async(Emotion.Request(emotion=EMOTIONS.get(mode, 'basic')))
             self._emotion_sent = mode
 
+    def _led(self, command, pixels=(), rgb=(0, 0, 0)):
+        req = SetLed.Request()
+        req.command = command
+        req.pixels = list(pixels)
+        req.r, req.g, req.b = (int(c) for c in rgb)
+        self.led_client.call_async(req)
+
+    def _led_tick(self):
+        """LED ring follows the lamp mode; police lights need a steady beat."""
+        if self.led_client is None or not self.led_client.service_is_ready():
+            return
+        style = LED_RING.get(self.lamp, LED_RING['OFF'])
+        if style == 'POLICE':
+            self._police_phase = not self._police_phase
+            red, blue = (255, 0, 0), (0, 0, 255)
+            left, right = (red, blue) if self._police_phase else (blue, red)
+            self._led('set_pixel', LED_LEFT, left)
+            self._led('set_pixel', LED_RIGHT, right)
+            self._led_sent = 'POLICE'
+        elif self._led_sent != self.lamp:
+            self._led('fill', rgb=style)
+            self._led_sent = self.lamp
+
     def lamp_off(self):
         """Turn the real lamp off (on shutdown)."""
         try:
             if self.lamp_client is not None and self.lamp_client.service_is_ready():
                 self.lamp_client.call_async(SetLamp.Request(mode=0))
+            if self.led_client is not None and self.led_client.service_is_ready():
+                self._led('clear')
         except Exception:  # context may already be shut down after Ctrl+C
             pass

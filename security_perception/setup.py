@@ -23,7 +23,8 @@ setup(
         'console_scripts': [
             'perception = security_perception.perception_node:main',
             'make_markers = security_perception.make_markers:main',
-            'camera_publisher = security_perception.camera_publisher:main'
+            'camera_publisher = security_perception.camera_publisher:main',
+            'find_dictionary = security_perception.find_dictionary:main'
         ],
     },
 )

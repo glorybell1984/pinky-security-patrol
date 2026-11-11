@@ -7,7 +7,8 @@
  *   /fleet/event_history    std_msgs/String JSON  last 500 events (for pages opened later)
  *   /traffic/waypoints      PoseArray             map
  *   /map                    OccupancyGrid         map background
- *   /perception/debug_image/compressed            camera panel
+ *   /perception/stream_url                        robot MJPEG stream for the live camera view
+ *   /perception/debug_image/compressed            Detections view (annotated, only while shown)
  *   /fake_pinky/status      std_msgs/String JSON  simulation panel (fake robot only)
  */
 (() => {
@@ -102,6 +103,45 @@
     return t;
   }
 
+  // Camera: the live view reads the robot's MJPEG stream (camera_server.py)
+  // straight from the browser; only the Detections view goes through rosbridge.
+  const camera = { url: params.get('cam'), override: !!params.get('cam'), mode: 'live',
+    debugTopic: null, subscribed: false, failed: false };
+
+  function showDebugImage(m) {
+    const img = $('camera-img');
+    img.src = `data:image/jpeg;base64,${m.data}`;
+    img.hidden = false;
+    $('camera-empty').hidden = true;
+  }
+
+  function updateCamera() {
+    const img = $('camera-img');
+    const live = camera.mode === 'live' && camera.url && !camera.failed;
+    $('cam-live').setAttribute('aria-pressed', String(camera.mode === 'live'));
+    $('cam-det').setAttribute('aria-pressed', String(camera.mode !== 'live'));
+    const wantDebug = !live;
+    if (camera.debugTopic) {
+      if (wantDebug && !camera.subscribed) { camera.debugTopic.subscribe(showDebugImage); camera.subscribed = true; }
+      if (!wantDebug && camera.subscribed) { camera.debugTopic.unsubscribe(); camera.subscribed = false; }
+    }
+    if (live) {
+      if (img.dataset.stream !== camera.url) {
+        img.dataset.stream = camera.url;
+        img.src = camera.url;
+      }
+      img.hidden = false;
+      $('camera-empty').hidden = true;
+      $('camera-src').textContent = `live · ${camera.url}`;
+    } else {
+      if (img.dataset.stream) { img.removeAttribute('src'); delete img.dataset.stream; img.hidden = true; }
+      $('camera-empty').hidden = !img.hidden;
+      $('camera-empty').textContent = camera.failed ? 'Live stream not reachable, waiting for detections image' : 'No camera image yet';
+      $('camera-src').textContent = camera.failed ? `stream failed · ${camera.url} · showing /perception/debug_image`
+        : '/perception/debug_image (annotated, via rosbridge)';
+    }
+  }
+
   function subscribeAll() {
     topic('/fleet/robot_state', 'security_interfaces/msg/RobotState', (m) => {
       state.robot = m;
@@ -134,12 +174,15 @@
       state.charger = { x: m.pose.position.x, y: m.pose.position.y };
     }, 5000);
     topic('/map', 'nav_msgs/msg/OccupancyGrid', (m) => { buildMapImage(m); scheduleRender(); }, 5000);
-    topic('/perception/debug_image/compressed', 'sensor_msgs/msg/CompressedImage', (m) => {
-      const img = $('camera-img');
-      img.src = `data:image/jpeg;base64,${m.data}`;
-      img.hidden = false;
-      $('camera-empty').hidden = true;
-    }, 200);
+    topic('/perception/stream_url', 'std_msgs/msg/String', (m) => {
+      if (camera.override || camera.url === m.data) return;
+      camera.url = m.data;
+      updateCamera();
+    }, 2000);
+    camera.debugTopic = new ROSLIB.Topic({ ros, name: '/perception/debug_image/compressed',
+      messageType: 'sensor_msgs/msg/CompressedImage', throttle_rate: 300, queue_length: 1 });
+    camera.subscribed = false;
+    updateCamera();
     topic('/fake_pinky/status', 'std_msgs/msg/String', (m) => {
       try { state.fake = JSON.parse(m.data); } catch (e) { return; }
       renderSim();
@@ -693,6 +736,14 @@
   $('btn-stop').addEventListener('click', () => trigger('/fleet/stop_patrol'));
   $('btn-unfollow').addEventListener('click', () => trigger('/fleet/stop_follow'));
   $('btn-home').addEventListener('click', () => trigger('/fleet/go_home'));
+  $('cam-live').addEventListener('click', () => { camera.mode = 'live'; camera.failed = false; updateCamera(); });
+  $('cam-det').addEventListener('click', () => { camera.mode = 'detections'; updateCamera(); });
+  $('camera-img').addEventListener('error', () => {
+    if (camera.mode !== 'live' || !camera.url) return;
+    camera.failed = true;
+    updateCamera();
+    setTimeout(() => { if (camera.failed && camera.mode === 'live') { camera.failed = false; updateCamera(); } }, 10000);
+  });
   $('btn-pause').addEventListener('click', () => {
     const r = state.robot;
     trigger(r && ['PAUSED', 'EMERGENCY_STOP'].includes(r.task_state) ? '/traffic/resume' : '/traffic/pause');
