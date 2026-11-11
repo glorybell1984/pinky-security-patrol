@@ -4,13 +4,14 @@
     "In section A, object #42 is still there and has not moved."
     "In section A, someone just picked up object #42 and I am following it."
 
-Claude writes the sentence when an API key (or `ant auth login` profile) and the
-network are available; otherwise, or on any error or timeout, a fixed template
-does. The robot never waits for the LLM: the ROS node calls narrate() from a
-worker thread.
+An LLM writes the sentence through a small provider interface (LLMProvider:
+complete(system, user) -> text or None). Providers are registered in PROVIDERS
+by name; "claude" uses Anthropic's official SDK. Without a provider, credentials
+or network, or on any error or timeout, a fixed template writes it. The robot
+never waits for the LLM: the ROS node calls narrate() from a worker thread.
 
-Pure Python apart from the optional `anthropic` package (imported lazily), so
-the event -> facts -> sentence logic is unit tested without ROS or a network.
+Pure Python apart from each provider's own package (imported lazily), so the
+event -> facts -> sentence logic is unit tested without ROS or a network.
 """
 import json
 import time
@@ -104,89 +105,96 @@ def _num(v):
         return None
 
 
-class Narrator:
-    """Writes the sentence with Claude, falling back to the template."""
+class LLMProvider:
+    """What the narrator needs from any LLM: one short completion.
 
-    def __init__(self, use_llm=True, model='claude-opus-5-5', effort='low',
-                 timeout=8.0, language='English', client=None, log=print):
-        self.model = model
+    complete() returns the reply text, or None when the provider cannot answer
+    now (error, timeout, refusal, backing off); the narrator then uses the
+    template. `off_reason` is set when the provider cannot work at all (package
+    missing, no credentials), so the narrator does not try again.
+    """
+
+    name = 'base'
+    off_reason = None
+
+    def describe(self):
+        return self.name
+
+    def complete(self, system, user):
+        raise NotImplementedError
+
+
+class ClaudeProvider(LLMProvider):
+    """Claude through Anthropic's official SDK (`pip install anthropic`).
+
+    Credentials: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or an `ant auth login`
+    profile. Short timeout and one retry: a late sentence is useless.
+    """
+
+    name = 'claude'
+    default_model = 'claude-opus-5-5'
+
+    def __init__(self, model='', effort='low', timeout=8.0, client=None, log=print):
+        self.model = model or self.default_model
         self.effort = effort
-        self.language = language
         self.log = log
-        self.recent = []                  # last sentences, for variety
-        self.llm_off_reason = None
         self.backoff_until = 0.0
+        self.sdk = None
         self.client = client
-        if not use_llm:
-            self.llm_off_reason = 'disabled (narrator_mode: template)'
-        elif client is None:
-            try:
-                import anthropic                       # optional dependency
-                self._anthropic = anthropic
-                # Credentials: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or an `ant auth login`
-                # profile. Short timeout and one retry: a late sentence is useless.
-                self.client = anthropic.Anthropic(timeout=timeout, max_retries=1)
-            except ImportError:
-                self.llm_off_reason = 'the anthropic package is not installed'
-            except Exception as e:  # noqa: BLE001  (no credentials, bad config)
-                self.llm_off_reason = f'no Claude credentials ({e.__class__.__name__})'
-        if self.client is not None and not hasattr(self, '_anthropic'):
-            try:
-                import anthropic
-                self._anthropic = anthropic
-            except ImportError:
-                self._anthropic = None
-
-    @property
-    def llm_enabled(self):
-        return self.client is not None and self.llm_off_reason is None
-
-    def narrate(self, facts):
-        """-> (sentence, source) where source is 'claude' or 'template'."""
-        text, source = None, 'template'
-        if self.llm_enabled and time.monotonic() >= self.backoff_until:
-            text = self._ask_claude(facts)
-            if text:
-                source = 'claude'
-        if not text:
-            text = template_sentence(facts)
-        self.recent = (self.recent + [text])[-3:]
-        return text, source
-
-    def _ask_claude(self, facts):
-        prompt = json.dumps({'facts': {k: v for k, v in facts.items() if v is not None},
-                             'language': self.language,
-                             'earlier_reports': self.recent}, ensure_ascii=False)
         try:
-            # Server-side refusal fallback (beta) so a declined request still gets an
-            # answer from another model; the template covers anything else.
+            import anthropic
+            self.sdk = anthropic
+        except ImportError:
+            if client is None:
+                self.off_reason = 'the anthropic package is not installed (pip install anthropic)'
+                return
+        if self.client is None:
+            try:
+                self.client = self.sdk.Anthropic(timeout=timeout, max_retries=1)
+            except Exception as e:  # noqa: BLE001  (bad config)
+                self.off_reason = f'Claude client failed ({e.__class__.__name__}: {e})'
+                return
+            # The client is created without credentials and only fails on the first
+            # request: check now, so the log says so once instead of on every event.
+            if not (getattr(self.client, 'api_key', None) or getattr(self.client, 'auth_token', None)
+                    or getattr(self.client, 'credentials', None)):
+                self.off_reason = ('no Claude credentials (set ANTHROPIC_API_KEY, '
+                                   'or run `ant auth login`)')
+
+    def describe(self):
+        return f'claude ({self.model}, effort {self.effort})'
+
+    def complete(self, system, user):
+        if time.monotonic() < self.backoff_until:
+            return None
+        try:
+            # Server-side refusal fallback (beta): a declined request is answered by
+            # another model inside the same call; the template covers anything else.
             response = self.client.beta.messages.create(
                 model=self.model,
                 max_tokens=1024,
-                system=SYSTEM_PROMPT,
-                messages=[{'role': 'user', 'content': prompt}],
+                system=system,
+                messages=[{'role': 'user', 'content': user}],
                 output_config={'effort': self.effort},
                 betas=['server-side-fallback-2026-07-01'],
                 fallbacks='default',
             )
-        except Exception as e:  # noqa: BLE001  (sorted below; the template always works)
+        except Exception as e:  # noqa: BLE001  (sorted in _on_error; the template always works)
             self._on_error(e)
             return None
         if response.stop_reason == 'refusal':
             self.log('narrator: Claude declined, using the template')
             return None
-        text = ' '.join(b.text for b in response.content if b.type == 'text').strip()
-        text = ' '.join(text.split())                  # one line for the dashboard
-        return text or None
+        return ' '.join(b.text for b in response.content if b.type == 'text') or None
 
     def _on_error(self, e):
-        a = self._anthropic
+        a = self.sdk
         if a is not None and isinstance(e, (a.AuthenticationError, a.PermissionDeniedError)):
-            self.llm_off_reason = f'Claude rejected the credentials ({e.__class__.__name__})'
-            self.log(f'narrator: {self.llm_off_reason}; templates from now on')
+            self.off_reason = f'Claude rejected the credentials ({e.__class__.__name__})'
+            self.log(f'narrator: {self.off_reason}; templates from now on')
         elif a is not None and isinstance(e, a.NotFoundError):
-            self.llm_off_reason = f'model {self.model} not found'
-            self.log(f'narrator: {self.llm_off_reason}; templates from now on')
+            self.off_reason = f'model {self.model} not found'
+            self.log(f'narrator: {self.off_reason}; templates from now on')
         elif a is not None and isinstance(e, a.RateLimitError):
             self.backoff_until = time.monotonic() + 30.0
             self.log('narrator: rate limited, templates for 30 s')
@@ -196,3 +204,53 @@ class Narrator:
         else:
             self.backoff_until = time.monotonic() + 10.0
             self.log(f'narrator: Claude error {e.__class__.__name__}: {e}; template used')
+
+
+# llm_provider parameter -> class. Add a provider: subclass LLMProvider, register here.
+PROVIDERS = {'claude': ClaudeProvider}
+
+
+def make_provider(name, model='', effort='low', timeout=8.0, log=print):
+    """Provider by name, or None for 'none' / 'template' (templates only)."""
+    name = (name or 'none').strip().lower()
+    if name in ('none', 'template', ''):
+        return None
+    if name not in PROVIDERS:
+        raise ValueError(f'unknown llm_provider {name!r} (known: {", ".join(PROVIDERS)}, none)')
+    return PROVIDERS[name](model=model, effort=effort, timeout=timeout, log=log)
+
+
+class Narrator:
+    """Writes the sentence with the LLM provider, falling back to the template."""
+
+    def __init__(self, provider=None, language='English', log=print):
+        self.provider = provider
+        self.language = language
+        self.log = log
+        self.recent = []                  # last sentences, for variety
+
+    @property
+    def llm_enabled(self):
+        return self.provider is not None and self.provider.off_reason is None
+
+    @property
+    def llm_off_reason(self):
+        if self.provider is None:
+            return 'no LLM provider (llm_provider: none)'
+        return self.provider.off_reason
+
+    def narrate(self, facts):
+        """-> (sentence, source): source is the provider name or 'template'."""
+        text, source = None, 'template'
+        if self.llm_enabled:
+            prompt = json.dumps({'facts': {k: v for k, v in facts.items() if v is not None},
+                                 'language': self.language,
+                                 'earlier_reports': self.recent}, ensure_ascii=False)
+            reply = self.provider.complete(SYSTEM_PROMPT, prompt)
+            text = ' '.join(reply.split()) if reply else None      # one line for the dashboard
+            if text:
+                source = self.provider.name
+        if not text:
+            text = template_sentence(facts)
+        self.recent = (self.recent + [text])[-3:]
+        return text, source

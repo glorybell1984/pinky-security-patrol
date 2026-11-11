@@ -3,13 +3,14 @@
 Subscribes:
     /fleet/events       std_msgs/String (JSON rows from the task manager)
 Publishes:
-    /fleet/narration    std_msgs/String (JSON: time, text, source claude|template,
+    /fleet/narration    std_msgs/String (JSON: time, text, source <provider>|template,
                         event, marker_id, section, level); keeps the last 10
                         for dashboards that connect later
     /fleet/zones        std_msgs/String (JSON list of sections, latched) for the dashboard
 
-Claude writes the sentence when credentials and the network are there (see
-narrator.py); otherwise a template does. Narration runs in a worker thread, so a
+An LLM provider (llm_provider: claude | none, see narrator.py) writes the
+sentence when its package, credentials and the network are there; otherwise a
+template does. Narration runs in a worker thread, so a
 slow or missing LLM never delays the patrol.
 """
 import json
@@ -22,7 +23,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 
-from .narrator import Narrator, facts_for
+from .narrator import Narrator, facts_for, make_provider
 from .zones import ZoneMap
 
 
@@ -31,10 +32,10 @@ class NarratorNode(Node):
     def __init__(self):
         super().__init__('narrator')
         p = self.declare_parameter
-        p('narrator_mode', 'claude')          # claude | template
-        p('model', 'claude-opus-5-5')
-        p('effort', 'low')                    # one sentence: low effort is enough
-        p('timeout', 8.0)                     # s per Claude request, then the template
+        p('llm_provider', 'claude')           # claude | none (templates only)
+        p('llm_model', '')                    # '' = the provider's default model
+        p('llm_effort', 'low')                # one sentence: low effort is enough
+        p('llm_timeout', 8.0)                 # s per request, then the template
         p('language', 'English')
         p('zone_names', ['A', 'B', 'C'])
         p('zone_descriptions', [''])
@@ -46,9 +47,10 @@ class NarratorNode(Node):
         polys = [float(v) for v in g('zone_polygons')]
         self.zones = ZoneMap.from_flat(names, list(g('zone_descriptions')), polys,
                                        int(g('zone_corners')))
-        self.narrator = Narrator(use_llm=g('narrator_mode') == 'claude', model=g('model'),
-                                 effort=g('effort'), timeout=float(g('timeout')),
-                                 language=g('language'), log=self.get_logger().warn)
+        log = self.get_logger().warn
+        provider = make_provider(g('llm_provider'), model=g('llm_model'),
+                                 effort=g('llm_effort'), timeout=float(g('llm_timeout')), log=log)
+        self.narrator = Narrator(provider, language=g('language'), log=log)
 
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         history = QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -59,8 +61,8 @@ class NarratorNode(Node):
 
         self.jobs = queue.Queue(maxsize=20)
         threading.Thread(target=self.worker, daemon=True).start()
-        who = (f'Claude ({self.narrator.model}, effort {self.narrator.effort})'
-               if self.narrator.llm_enabled else f'templates: {self.narrator.llm_off_reason}')
+        who = (f'LLM {self.narrator.provider.describe()}' if self.narrator.llm_enabled
+               else f'templates: {self.narrator.llm_off_reason}')
         self.get_logger().info(f'Narrator ready: {len(self.zones.zones)} sections '
                                f'({", ".join(z.name for z in self.zones.zones)}), {who}')
 

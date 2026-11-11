@@ -815,9 +815,10 @@
     const src = $('report-src');
     if (state.reports.length) {
       src.hidden = false;
-      src.textContent = state.reports[0].source === 'claude' ? 'Claude' : 'template';
-      src.title = state.reports[0].source === 'claude' ? 'Sentences written by Claude'
-        : 'Fixed sentences (no Claude credentials or network)';
+      const llm = state.reports[0].source && state.reports[0].source !== 'template';
+      src.textContent = llm ? state.reports[0].source : 'template';
+      src.title = llm ? `Sentences written by the LLM (${state.reports[0].source})`
+        : 'Fixed sentences (no LLM provider, credentials or network)';
     }
   }
 

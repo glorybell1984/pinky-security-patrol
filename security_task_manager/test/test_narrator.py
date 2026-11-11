@@ -1,7 +1,9 @@
-"""Narrator: sections, facts, templates, and the Claude path with a fake client."""
+"""Narrator: sections, facts, templates, the provider interface, and the Claude
+provider with a fake client."""
 from types import SimpleNamespace
 
-from security_task_manager.narrator import Narrator, facts_for, template_sentence
+from security_task_manager.narrator import (ClaudeProvider, LLMProvider, Narrator, facts_for,
+                                            make_provider, template_sentence)
 from security_task_manager.zones import ZoneMap
 
 # police_map2 sections (security_bringup/config/narrator.yaml)
@@ -41,10 +43,26 @@ def test_robot_events_use_the_robot_position_and_noise_is_skipped():
     assert facts_for(row('nav_retry'), ZONES) is None
 
 
-def test_without_credentials_or_package_the_template_is_used():
-    n = Narrator(use_llm=False)
+def test_without_a_provider_the_template_is_used():
+    n = Narrator(make_provider('none'))
     text, source = n.narrate(facts_for(row('detected'), ZONES))
     assert source == 'template' and text.startswith('In section C,')
+    try:
+        make_provider('unknown-llm')
+        assert False, 'unknown provider must be rejected'
+    except ValueError:
+        pass
+
+
+def test_any_provider_works_through_the_interface():
+    class Echo(LLMProvider):
+        name = 'echo'
+
+        def complete(self, system, user):
+            assert 'one short sentence' in system and '"section": "C"' in user
+            return 'In section C,  a new object (#42)\nis here.'
+    text, source = Narrator(Echo()).narrate(facts_for(row('detected'), ZONES))
+    assert (text, source) == ('In section C, a new object (#42) is here.', 'echo')
 
 
 class FakeMessages:
@@ -64,21 +82,44 @@ def fake_client(messages):
     return SimpleNamespace(beta=SimpleNamespace(messages=messages))
 
 
+def claude(messages):
+    return ClaudeProvider(client=fake_client(messages), log=lambda *_: None)
+
+
 def test_claude_sentence_is_used_and_request_is_sane():
     msgs = FakeMessages(reply='In section C, a suspicious object (#42)\nhas been spotted.')
-    n = Narrator(client=fake_client(msgs), log=lambda *_: None)
-    text, source = n.narrate(facts_for(row('detected'), ZONES))
+    text, source = Narrator(claude(msgs)).narrate(facts_for(row('detected'), ZONES))
     assert source == 'claude'
     assert text == 'In section C, a suspicious object (#42) has been spotted.'   # one line
     kw = msgs.calls[0]
     assert kw['model'] == 'claude-opus-5-5' and kw['output_config'] == {'effort': 'low'}
+    assert kw['fallbacks'] == 'default'
     assert '"section": "C"' in kw['messages'][0]['content']
 
 
 def test_claude_refusal_or_error_falls_back_to_the_template():
-    n = Narrator(client=fake_client(FakeMessages(reply='', stop='refusal')), log=lambda *_: None)
+    n = Narrator(claude(FakeMessages(reply='', stop='refusal')))
     assert n.narrate(facts_for(row('detected'), ZONES))[1] == 'template'
-    n = Narrator(client=fake_client(FakeMessages(error=RuntimeError('boom'))),
-                 log=lambda *_: None)
+    n = Narrator(claude(FakeMessages(error=RuntimeError('boom'))))
     text, source = n.narrate(facts_for(row('seen_again', level=2), ZONES))
     assert source == 'template' and 'still there' in text
+
+
+def test_real_sdk_without_credentials_means_templates(monkeypatch):
+    """With the anthropic package installed but no key, the provider switches off at
+    startup (the SDK client itself would only fail on the first request)."""
+    for var in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_PROFILE'):
+        monkeypatch.delenv(var, raising=False)
+    n = Narrator(make_provider('claude', log=lambda *_: None))
+    assert not n.llm_enabled
+    assert 'credentials' in n.llm_off_reason or 'not installed' in n.llm_off_reason
+    assert n.narrate(facts_for(row('detected'), ZONES)) == \
+        ('In section C, a suspicious object (#42) has been detected.', 'template')
+
+
+def test_real_sdk_with_a_key_is_enabled(monkeypatch):
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-test-not-a-real-key')
+    p = make_provider('claude', log=lambda *_: None)
+    if p.sdk is None:
+        return                                             # package not installed here
+    assert Narrator(p).llm_enabled and p.describe() == 'claude (claude-opus-5-5, effort low)'

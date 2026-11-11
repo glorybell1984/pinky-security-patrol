@@ -24,7 +24,7 @@ The whole system also runs on a **fake Pinky** (simulated robot and world) for t
 | Dock options | Two-phase (align, then straight in) and backward docking (camera watches the room while charging), off by default ([docking.md](docs/docking.md)) |
 | Robot signals | Front lamp (`/set_lamp`), LED ring (`/set_led`, police lights on level 3) and LCD face (`/set_emotion`) follow the robot state |
 | Operator | Dashboard: map, object registry, event log, camera, start / stop / pause / go home / emergency stop |
-| Reports in words | "In section C, object #42 is still there and has not moved." Claude writes each sentence, templates without network ([narrator.md](docs/narrator.md)) |
+| Reports in words | "In section C, object #42 is still there and has not moved." an LLM (Claude by default, pluggable) writes each sentence, templates without network ([narrator.md](docs/narrator.md)) |
 | Logs | `~/patrol_logs/events_<time>.csv`, every decision with positions |
 
 ## Architecture
@@ -235,7 +235,7 @@ python3 -m pytest security_traffic_manager/test    # docking math + closed-loop 
 |---|---|
 | [docs/demo_guide.md](docs/demo_guide.md) | Fake demo scenario, real robot start order, camera setup, remaining checklist |
 | [docs/limitations.md](docs/limitations.md) | **Project goal:** every Pinky Pro capability, what we measured, its limits and workarounds |
-| [docs/narrator.md](docs/narrator.md) | Reports by map section: sections, Claude setup, templates |
+| [docs/narrator.md](docs/narrator.md) | Reports by map section: sections, LLM providers and Claude setup, templates |
 | [docs/docking.md](docs/docking.md) | Home dock: how docking works, building the dock, calibration, tuning |
 | [docs/architecture.md](docs/architecture.md) | Topics, services, states, design decisions |
 | [docs/scenarios.md](docs/scenarios.md) | Demo scenario and test checklist (fake / real) |
