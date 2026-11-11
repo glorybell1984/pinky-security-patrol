@@ -21,7 +21,8 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'task_manager = security_task_manager.task_manager_node:main'
+            'task_manager = security_task_manager.task_manager_node:main',
+            'narrator = security_task_manager.narrator_node:main',
         ],
     },
 )

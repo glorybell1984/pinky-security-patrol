@@ -149,3 +149,12 @@ button { font-family: inherit; }
 @media (max-width: 640px) {
   .topbar, .tabs, .content { padding-left: 16px; padding-right: 16px; }
 }
+
+/* Robot reports (narrator) */
+.reports { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.report { display: flex; gap: 10px; align-items: baseline; padding: 6px 10px; border-left: 3px solid var(--line); border-radius: 6px; background: var(--bg); }
+.report-time { color: var(--muted); font-size: 12px; flex: none; }
+.report-text { font-size: 14px; line-height: 1.35; }
+.report.lvl-1 { border-left-color: #F59E0B; }
+.report.lvl-2 { border-left-color: #EF4444; }
+.report.lvl-3 { border-left-color: #A855F7; background: #FAF5FF; }

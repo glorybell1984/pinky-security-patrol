@@ -14,6 +14,7 @@
 -->
 <launch>
   <arg name="rosbridge" default="true"/>
+  <arg name="narrator" default="true" description="sentences for the dashboard (docs/narrator.md)"/>
   <arg name="sim" default="false" description="true: Pinky MuJoCo or Gazebo simulator"/>
   <let name="config_dir" value="$(find-pkg-share security_bringup)/config"/>
   <let name="perception_config" value="perception_sim.yaml" if="$(var sim)"/>
@@ -32,6 +33,11 @@
   <node pkg="security_task_manager" exec="task_manager" output="screen">
     <param from="$(var config_dir)/rules.yaml"/>
     <param name="use_sim_time" value="$(var sim)"/>
+  </node>
+
+  <!-- event -> sentence by map section (Claude, or templates without credentials) -->
+  <node if="$(var narrator)" pkg="security_task_manager" exec="narrator" output="screen">
+    <param from="$(var config_dir)/narrator.yaml"/>
   </node>
 
   <include if="$(var rosbridge)"

@@ -1,0 +1,18 @@
+# Narrator: patrol events -> one short sentence per event, by map section.
+#   "In section A, a suspicious object (#42) has been detected."
+# Claude writes the sentence (needs the anthropic package and credentials:
+# ANTHROPIC_API_KEY or "ant auth login"); without them, or on any error or
+# timeout, a fixed template does. See docs/narrator.md.
+narrator:
+  ros__parameters:
+    narrator_mode: claude          # claude | template
+    model: claude-opus-5-5
+    effort: low                    # one sentence: low effort is fast enough
+    timeout: 8.0                   # s per request, then the template
+    language: English              # e.g. Korean
+    # Sections of police_map2: three bands along the arena (A = dock end, C = far end).
+    # Each zone: zone_corners points, x, y in the map frame, all zones in one list.
+    zone_names: [A, B, C]
+    zone_descriptions: [dock end, middle, far end]
+    zone_corners: 4
+    zone_polygons: [-1.76, -2.71, -0.58, -1.33, -3.78, 1.39, -4.95, 0.01, -0.58, -1.33, 0.59, 0.05, -2.60, 2.77, -3.78, 1.39, 0.59, 0.05, 1.77, 1.43, -1.42, 4.15, -2.60, 2.77]

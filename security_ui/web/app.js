@@ -31,6 +31,8 @@
     logFilter: 'all',
     selected: null,
     dismissedAlert: new Set(),
+    reports: [],            // /fleet/narration, newest first
+    zones: [],              // /fleet/zones: [{name, description, polygon}]
   };
   const MAX_EVENTS = 1000;
 
@@ -156,6 +158,21 @@
     ev.subscribe((m) => {
       try { addEvent(JSON.parse(m.data)); } catch (e) { /* ignore malformed */ }
     });
+    const nar = new ROSLIB.Topic({ ros, name: '/fleet/narration', messageType: 'std_msgs/msg/String', queue_length: 20 });
+    nar.subscribe((m) => {
+      let r;
+      try { r = JSON.parse(m.data); } catch (e) { return; }
+      // the topic replays its last 10 reports to a new connection: skip ones we have
+      if (state.reports.some((x) => x.time === r.time && x.text === r.text)) return;
+      state.reports.push(r);
+      state.reports.sort((a, b) => (a.time < b.time ? 1 : -1));
+      state.reports.length = Math.min(state.reports.length, 30);
+      scheduleRender();
+    });
+    topic('/fleet/zones', 'std_msgs/msg/String', (m) => {
+      try { state.zones = JSON.parse(m.data); } catch (e) { return; }
+      scheduleRender();
+    }, 5000);
     topic('/fleet/event_history', 'std_msgs/msg/String', (m) => {
       let list;
       try { list = JSON.parse(m.data); } catch (e) { return; }
@@ -307,6 +324,28 @@
       for (let x = Math.ceil(v.minX); x <= v.maxX; x += 0.5) { ctx.beginPath(); ctx.moveTo(v.sx(x), v.sy(v.minY)); ctx.lineTo(v.sx(x), v.sy(v.maxY)); ctx.stroke(); }
       for (let y = Math.ceil(v.minY); y <= v.maxY; y += 0.5) { ctx.beginPath(); ctx.moveTo(v.sx(v.minX), v.sy(y)); ctx.lineTo(v.sx(v.maxX), v.sy(y)); ctx.stroke(); }
     }
+
+    // map sections (narrator): light outline + name
+    const ZONE_COLORS = ['#F59E0B', '#10B981', '#A855F7', '#0EA5E9', '#EF4444', '#64748B'];
+    state.zones.forEach((z, k) => {
+      if (!z.polygon || z.polygon.length < 3) return;
+      const col = ZONE_COLORS[k % ZONE_COLORS.length];
+      ctx.beginPath();
+      z.polygon.forEach(([x, y], i) => (i ? ctx.lineTo(v.sx(x), v.sy(y)) : ctx.moveTo(v.sx(x), v.sy(y))));
+      ctx.closePath();
+      ctx.fillStyle = col + '14';
+      ctx.fill();
+      ctx.strokeStyle = col + '99';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const cx = z.polygon.reduce((s, p) => s + p[0], 0) / z.polygon.length;
+      const cy = z.polygon.reduce((s, p) => s + p[1], 0) / z.polygon.length;
+      ctx.fillStyle = col;
+      ctx.font = '600 14px Inter, sans-serif';
+      ctx.fillText(z.name, v.sx(cx) - 5, v.sy(cy) + 5);
+    });
 
     // patrol loop
     if (state.waypoints.length) {
@@ -762,7 +801,28 @@
     requestAnimationFrame(() => { renderPending = false; render(); });
   }
 
+  function renderReports() {
+    const list = $('reports');
+    list.replaceChildren(...state.reports.slice(0, 8).map((r) => {
+      const lvl = Number(r.level) || 0;
+      const time = (r.time || '').slice(11, 19);
+      return el('li', { class: `report lvl-${lvl}` }, [
+        el('span', { class: 'report-time mono-num', text: time }),
+        el('span', { class: 'report-text', text: r.text || '' }),
+      ]);
+    }));
+    $('reports-empty').hidden = state.reports.length > 0;
+    const src = $('report-src');
+    if (state.reports.length) {
+      src.hidden = false;
+      src.textContent = state.reports[0].source === 'claude' ? 'Claude' : 'template';
+      src.title = state.reports[0].source === 'claude' ? 'Sentences written by Claude'
+        : 'Fixed sentences (no Claude credentials or network)';
+    }
+  }
+
   function render() {
+    renderReports();
     $('badge-objects').textContent = String(state.objects.size);
     $('badge-log').textContent = String(state.events.length);
     renderAlert();

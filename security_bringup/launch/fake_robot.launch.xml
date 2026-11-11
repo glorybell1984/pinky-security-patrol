@@ -27,6 +27,10 @@
       <param name="view_distance" value="2.0"/>   <!-- fake camera sees 2.2 m -->
       <param name="auto_start_patrol" value="true"/>
     </node>
+    <node pkg="security_task_manager" exec="narrator" output="screen">
+      <param from="$(var config_dir)/narrator.yaml"/>
+      <param name="zone_polygons" value="[0.0]"/>        <!-- built-in room: no sections -->
+    </node>
   </group>
 
   <!-- real demo arena: walls from the SLAM map, same rules as the real robot -->
@@ -42,6 +46,9 @@
       <param from="$(var config_dir)/rules.yaml"/>
       <param name="camera_hfov" value="1.0423"/>   <!-- real Pinky camera, measured -->
       <param name="auto_start_patrol" value="true"/>
+    </node>
+    <node pkg="security_task_manager" exec="narrator" output="screen">
+      <param from="$(var config_dir)/narrator.yaml"/>   <!-- police_map2 sections -->
     </node>
   </group>
 
