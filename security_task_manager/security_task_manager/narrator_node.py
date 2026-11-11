@@ -35,7 +35,7 @@ class NarratorNode(Node):
         p('llm_provider', 'claude')           # claude | none (templates only)
         p('llm_model', '')                    # '' = the provider's default model
         p('llm_effort', 'low')                # one sentence: low effort is enough
-        p('llm_timeout', 8.0)                 # s per request, then the template
+        p('llm_timeout', 12.0)                # s per request, then the template
         p('language', 'English')
         p('zone_names', ['A', 'B', 'C'])
         p('zone_descriptions', [''])

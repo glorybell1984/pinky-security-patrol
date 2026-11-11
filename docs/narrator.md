@@ -51,7 +51,7 @@ dashboard.
 
 | `llm_provider` | Uses | Needs |
 |---|---|---|
-| `gemini` (default) | Google's official SDK (`google-genai`); model from `llm_model`, or the newest plain "flash" model the key can use (picked on the first request and logged); 8 s timeout, one retry | `pip install google-genai` + `GEMINI_API_KEY` |
+| `gemini` (default) | Google's official SDK (`google-genai`); `gemini-3.8-flash` (`llm_model`; empty = the newest plain "flash" model the key can use, logged) at thinking level `low` (`llm_effort`): **1.9 s** per sentence, 8.2 s at the model's default thinking (measured 2026-11-11); 12 s timeout (the API needs at least 10 s), one retry | `pip install google-genai` + `GEMINI_API_KEY` |
 | `claude` | Anthropic's official SDK, `claude-opus-5-5` at effort `low`, 8 s timeout, one retry, server-side refusal fallback (`fallbacks: "default"`) | `pip install anthropic` + `ANTHROPIC_API_KEY` |
 | `none` | Templates only | nothing |
 
@@ -84,7 +84,7 @@ Network down, timeout or rate limit/quota: the template for that report, the LLM
 again after 10-30 s.
 
 Options (`narrator.yaml`): `llm_provider`, `llm_model` ('' = provider default),
-`llm_effort` (claude), `llm_timeout`, `language`.
+`llm_effort` (Claude effort / Gemini thinking level), `llm_timeout`, `language`.
 
 Cost: one short request per reported event (a demo produces a few per minute), a
 few hundred tokens each.

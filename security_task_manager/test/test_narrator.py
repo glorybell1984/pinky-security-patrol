@@ -184,3 +184,26 @@ def test_gemini_without_key_or_flash_model_means_templates(monkeypatch):
     p = gemini(FakeGeminiModels(['gemini-3.1-pro']))
     assert Narrator(p).narrate(facts_for(row('detected'), ZONES))[1] == 'template'
     assert 'no Gemini flash model' in p.off_reason
+
+
+def test_gemini_sends_the_thinking_level_and_retries_without_it_if_rejected():
+    p0 = GeminiProvider(client=SimpleNamespace(models=None))
+    if p0.errors is None:
+        return                                             # google-genai not installed here
+    from google.genai import errors
+
+    class PickyModels(FakeGeminiModels):
+        def generate_content(self, model, contents, config):
+            self.calls.append(SimpleNamespace(model=model, contents=contents, config=config))
+            if config.thinking_config is not None:
+                raise errors.ClientError(400, {'error': {
+                    'code': 400, 'message': 'Thinking level LOW is not supported for this model.'}})
+            return SimpleNamespace(candidates=[object()], text='In section C, all quiet.')
+    models = PickyModels([])
+    p = GeminiProvider(model='gemini-x-flash', effort='low',
+                       client=SimpleNamespace(models=models), log=lambda *_: None)
+    assert p.thinking_level == 'LOW'
+    text, source = Narrator(p).narrate(facts_for(row('detected'), ZONES))
+    assert (text, source) == ('In section C, all quiet.', 'gemini')
+    assert models.calls[0].config.thinking_config.thinking_level == 'LOW'
+    assert models.calls[1].config.thinking_config is None and p.thinking_level is None

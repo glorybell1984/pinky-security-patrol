@@ -212,14 +212,18 @@ class GeminiProvider(LLMProvider):
 
     Credentials: GEMINI_API_KEY or GOOGLE_API_KEY. With no llm_model, the newest
     plain "flash" model the key can use is picked on the first request (logged).
+    llm_effort sets the thinking level (low -> LOW): gemini-3.8-flash took 8.2 s
+    per sentence with its default thinking and 1.9 s at LOW (2026-11-11). A model
+    that rejects the level is asked again without it.
     """
 
     name = 'gemini'
     SKIP = ('lite', 'image', 'tts', 'audio', 'live', 'embedding', 'exp', 'thinking',
             'native', 'robotics', 'computer')
 
-    def __init__(self, model='', effort='low', timeout=8.0, client=None, log=print):
+    def __init__(self, model='', effort='low', timeout=12.0, client=None, log=print):
         self.model = model
+        self.thinking_level = (effort or '').strip().upper() or None   # LOW, MEDIUM, HIGH
         self.log = log
         self.backoff_until = 0.0
         self.sdk = self.types = self.errors = None
@@ -235,9 +239,10 @@ class GeminiProvider(LLMProvider):
                 return
         if self.client is None:
             try:
-                # timeout in milliseconds; one retry: a late sentence is useless
+                # timeout in milliseconds, at least 10 s (the API rejects shorter
+                # deadlines: "Minimum allowed deadline is 10s"); one retry
                 self.client = self.sdk.Client(http_options=self.types.HttpOptions(
-                    timeout=int(timeout * 1000),
+                    timeout=int(max(timeout, 10.0) * 1000),
                     retry_options=self.types.HttpRetryOptions(attempts=2)))
             except ValueError:                         # no GEMINI_API_KEY / GOOGLE_API_KEY
                 self.off_reason = 'no Gemini credentials (set GEMINI_API_KEY)'
@@ -245,7 +250,8 @@ class GeminiProvider(LLMProvider):
                 self.off_reason = f'Gemini client failed ({e.__class__.__name__}: {e})'
 
     def describe(self):
-        return f'gemini ({self.model or "newest flash model, picked on first use"})'
+        model = self.model or 'newest flash model, picked on first use'
+        return f'gemini ({model}, thinking {self.thinking_level or "model default"})'
 
     def pick_model(self):
         """Newest plain flash model that supports generateContent."""
@@ -275,17 +281,36 @@ class GeminiProvider(LLMProvider):
                     return None
                 self.log(f'narrator: using Gemini model {self.model} '
                          '(pin it with llm_model in narrator.yaml)')
-            response = self.client.models.generate_content(
-                model=self.model, contents=user,
-                config=self.types.GenerateContentConfig(system_instruction=system,
-                                                        max_output_tokens=2048))
-        except Exception as e:  # noqa: BLE001  (sorted in _on_error; the template always works)
-            self._on_error(e)
-            return None
+            response = self._generate(system, user)
+        except Exception as e:  # noqa: BLE001
+            if self._rejects_thinking_level(e):
+                self.log(f'narrator: {self.model} does not take thinking level '
+                         f'{self.thinking_level}; using its default')
+                self.thinking_level = None
+                try:
+                    response = self._generate(system, user)
+                except Exception as e2:  # noqa: BLE001
+                    self._on_error(e2)
+                    return None
+            else:
+                self._on_error(e)     # sorted there; the template always works
+                return None
         text = response.text if response.candidates else None
         if not text:
             self.log('narrator: Gemini gave no text (blocked or empty), using the template')
         return text or None
+
+    def _generate(self, system, user):
+        cfg = dict(system_instruction=system, max_output_tokens=2048)
+        if self.thinking_level:
+            cfg['thinking_config'] = self.types.ThinkingConfig(thinking_level=self.thinking_level)
+        return self.client.models.generate_content(
+            model=self.model, contents=user, config=self.types.GenerateContentConfig(**cfg))
+
+    def _rejects_thinking_level(self, e):
+        return (self.thinking_level is not None and self.errors is not None
+                and isinstance(e, self.errors.ClientError) and getattr(e, 'code', None) == 400
+                and 'thinking' in str(getattr(e, 'message', '') or e).lower())
 
     def _on_error(self, e):
         err = self.errors

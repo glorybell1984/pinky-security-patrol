@@ -7,9 +7,9 @@
 narrator:
   ros__parameters:
     llm_provider: gemini           # gemini | claude | none (templates only)
-    llm_model: ''                  # '' = provider default (gemini: newest flash, logged; claude: claude-opus-5-5)
-    llm_effort: low                # claude only: one sentence, low effort is fast enough
-    llm_timeout: 8.0               # s per request, then the template
+    llm_model: gemini-3.8-flash    # '' = provider default (gemini: newest flash, logged; claude: claude-opus-5-5)
+    llm_effort: low                # thinking: gemini-3.8-flash 1.9 s per sentence at low, 8.2 s at its default
+    llm_timeout: 12.0              # s per request, then the template (Gemini: at least 10)
     language: English
     # Sections of police_map2: three bands along the arena (A = dock end, C = far end).
     # Each zone: zone_corners points, x, y in the map frame, all zones in one list.
