@@ -1,0 +1,44 @@
+<!--
+  LAPTOP side in one launch: Nav2 on the arena map, RViz, our patrol system,
+  rosbridge and the dashboard. The robot side is robot.launch.xml (on the Pinky).
+
+    source /opt/ros/jazzy/setup.bash
+    source ~/pinky/install/local_setup.bash          (Pinky first: Nav2 launch, lamp/LED types)
+    source ~/patrol_ws/install/local_setup.bash
+    ros2 launch security_bringup laptop.launch.xml
+    ros2 launch security_bringup laptop.launch.xml rviz:=false dashboard:=false
+
+  Then in RViz: 2D Pose Estimate where the robot really is, and Start patrol on the
+  dashboard. ROS_DOMAIN_ID is set for every process started here (default 17, the
+  robot's), whatever the terminal says.
+  Note: XML comments cannot contain two dashes in a row.
+-->
+<launch>
+  <arg name="domain" default="17" description="ROS_DOMAIN_ID (same as robot.launch.xml)"/>
+  <arg name="map" default="$(find-pkg-share security_bringup)/maps/police_map2.yaml"/>
+  <arg name="nav2_params" default="$(find-pkg-share security_bringup)/config/nav2_arena.yaml"/>
+  <arg name="rviz" default="true"/>
+  <arg name="dashboard" default="true" description="open the dashboard in the browser"/>
+  <arg name="rosbridge" default="true"/>
+
+  <set_env name="ROS_DOMAIN_ID" value="$(var domain)"/>
+  <set_env name="ROS_LOCALHOST_ONLY" value="0"/>
+
+  <!-- Nav2: map server, AMCL, planner, controller (Pinky's launch, our map and params) -->
+  <include file="$(find-pkg-share pinky_navigation)/launch/bringup_launch.xml">
+    <arg name="map" value="$(var map)"/>
+    <arg name="params_file" value="$(var nav2_params)"/>
+  </include>
+
+  <include if="$(var rviz)" file="$(find-pkg-share pinky_navigation)/launch/nav2_view.launch.xml"/>
+
+  <!-- perception, traffic manager, task manager, rosbridge -->
+  <include file="$(find-pkg-share security_bringup)/launch/patrol_system.launch.xml">
+    <arg name="rosbridge" value="$(var rosbridge)"/>
+  </include>
+
+  <!-- dashboard: give rosbridge a few seconds to start -->
+  <timer if="$(var dashboard)" period="6.0">
+    <executable cmd="xdg-open $(find-pkg-share security_ui)/web/index.html" output="log"/>
+  </timer>
+</launch>

@@ -81,22 +81,48 @@ Step-by-step demo: [docs/demo_guide.md](docs/demo_guide.md).
 
 ## Run on the real Pinky
 
+**One launch on each side** (both set `ROS_DOMAIN_ID` 17 for everything they start).
+
+Once, copy the robot files (robot IP: ours is 192.168.14.80):
 ```bash
-# ---- Robot (ssh), one terminal each
+cd ~/patrol_ws/src/pinky-security-patrol
+scp security_bringup/launch/robot.launch.xml \
+    security_perception/security_perception/camera_publisher.py \
+    security_perception/security_perception/camera_server.py  pinky@192.168.14.80:~/
+```
+
+```bash
+# ---- Robot (ssh pinky@192.168.14.80): bringup, lamp, LED ring, LCD, camera
+ros2 launch ~/robot.launch.xml
+#   options: emotion:=false  camera:=http|none  rotate:=180  imu:=true  domain:=17
+
+# ---- Laptop: Nav2 (police_map2 + nav2_arena.yaml), RViz, patrol system, dashboard
+source /opt/ros/jazzy/setup.bash && source ~/pinky/install/local_setup.bash && source ~/patrol_ws/install/local_setup.bash
+ros2 launch security_bringup laptop.launch.xml
+#   options: rviz:=false  dashboard:=false  map:=<yaml>  domain:=17
+```
+
+Then in RViz: **2D Pose Estimate** where the robot really is, and **Start patrol** on the dashboard.
+
+<details><summary>The same, one terminal per program</summary>
+
+```bash
+# Robot
 ros2 launch pinky_bringup bringup_robot.launch.xml
 ros2 run pinky_lamp_control main_node
-ros2 run pinky_led led_server                      # optional, LED ring
-ros2 run pinky_emotion emotion_server              # optional, LCD faces
-python3 ~/camera_server.py                         # Flask camera stream; copy it once, see docs/demo_guide.md
+ros2 run pinky_led led_server                      # LED ring
+ros2 run pinky_emotion emotion_server              # LCD faces
+python3 ~/camera_publisher.py                      # or camera_server.py (image_source: http)
 
-# ---- Laptop
+# Laptop
 ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map2.yaml \
     params_file:=$(ros2 pkg prefix security_bringup)/share/security_bringup/config/nav2_arena.yaml
 ros2 launch pinky_navigation nav2_view.launch.xml  # RViz: 2D Pose Estimate first
 ros2 launch security_bringup patrol_system.launch.xml
 ```
-
 Same `ROS_DOMAIN_ID` on the robot and the laptop, `ROS_LOCALHOST_ONLY` off.
+</details>
+
 Pinky's own simulator also works: `patrol_system.launch.xml sim:=true`.
 
 ## Open the dashboard
