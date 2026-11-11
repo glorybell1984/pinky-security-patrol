@@ -123,3 +123,64 @@ def test_real_sdk_with_a_key_is_enabled(monkeypatch):
     if p.sdk is None:
         return                                             # package not installed here
     assert Narrator(p).llm_enabled and p.describe() == 'claude (claude-opus-5-5, effort low)'
+
+
+# ---------------------------------------------------------------- Gemini provider
+from security_task_manager.narrator import GeminiProvider  # noqa: E402
+
+
+class FakeGeminiModels:
+    def __init__(self, names, reply='In section C, a new object (#42) is here.', error=None):
+        self.names, self.reply, self.error, self.calls = names, reply, error, []
+
+    def list(self):
+        return [SimpleNamespace(name=f'models/{n}', supported_actions=['generateContent'])
+                for n in self.names]
+
+    def generate_content(self, model, contents, config):
+        self.calls.append(SimpleNamespace(model=model, contents=contents, config=config))
+        if self.error:
+            raise self.error
+        return SimpleNamespace(candidates=[object()], text=self.reply)
+
+
+def gemini(models, model=''):
+    return GeminiProvider(model=model, client=SimpleNamespace(models=models), log=lambda *_: None)
+
+
+def test_gemini_picks_the_newest_plain_flash_model_and_sends_the_prompt():
+    models = FakeGeminiModels(['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.1-flash',
+                               'gemini-3.1-flash-image', 'gemini-3.5-flash-preview',
+                               'gemini-3.1-pro'])
+    p = gemini(models)
+    text, source = Narrator(p).narrate(facts_for(row('detected'), ZONES))
+    assert source == 'gemini' and text == 'In section C, a new object (#42) is here.'
+    call = models.calls[0]
+    assert call.model == 'gemini-3.1-flash'               # newest stable flash, no lite/image/preview
+    assert 'one short sentence' in call.config.system_instruction
+    assert '"section": "C"' in call.contents
+
+
+def test_gemini_errors_fall_back_to_the_template():
+    if GeminiProvider(client=SimpleNamespace(models=None)).errors is None:
+        return                                             # google-genai not installed here
+    from google.genai import errors
+    bad_key = errors.ClientError(400, {'error': {'code': 400, 'message': 'API key not valid.'}})
+    p = gemini(FakeGeminiModels([], error=bad_key), model='gemini-x-flash')
+    n = Narrator(p)
+    assert n.narrate(facts_for(row('detected'), ZONES))[1] == 'template'
+    assert not n.llm_enabled and 'API key' in n.llm_off_reason          # off for good
+    quota = errors.ClientError(429, {'error': {'code': 429, 'message': 'Resource exhausted'}})
+    p = gemini(FakeGeminiModels([], error=quota), model='gemini-x-flash')
+    assert Narrator(p).narrate(facts_for(row('seen_again', level=2), ZONES))[1] == 'template'
+    assert p.off_reason is None and p.backoff_until > 0                 # tries again later
+
+
+def test_gemini_without_key_or_flash_model_means_templates(monkeypatch):
+    monkeypatch.delenv('GEMINI_API_KEY', raising=False)
+    monkeypatch.delenv('GOOGLE_API_KEY', raising=False)
+    p = make_provider('gemini', log=lambda *_: None)
+    assert p.off_reason and ('credentials' in p.off_reason or 'not installed' in p.off_reason)
+    p = gemini(FakeGeminiModels(['gemini-3.1-pro']))
+    assert Narrator(p).narrate(facts_for(row('detected'), ZONES))[1] == 'template'
+    assert 'no Gemini flash model' in p.off_reason

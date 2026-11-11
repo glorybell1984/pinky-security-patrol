@@ -51,35 +51,40 @@ dashboard.
 
 | `llm_provider` | Uses | Needs |
 |---|---|---|
-| `claude` (default) | Anthropic's official SDK, `claude-opus-5-5` at effort `low`, 8 s timeout, one retry, server-side refusal fallback (`fallbacks: "default"`) | `pip install anthropic` + a key |
+| `gemini` (default) | Google's official SDK (`google-genai`); model from `llm_model`, or the newest plain "flash" model the key can use (picked on the first request and logged); 8 s timeout, one retry | `pip install google-genai` + `GEMINI_API_KEY` |
+| `claude` | Anthropic's official SDK, `claude-opus-5-5` at effort `low`, 8 s timeout, one retry, server-side refusal fallback (`fallbacks: "default"`) | `pip install anthropic` + `ANTHROPIC_API_KEY` |
 | `none` | Templates only | nothing |
 
 Adding a provider: subclass `LLMProvider` in `narrator.py` (return `None` when it
 cannot answer; set `off_reason` when it can never work), and register it in
 `PROVIDERS`. Then `llm_provider: <name>` in `narrator.yaml`.
 
-### Claude setup (laptop, once)
+### Setup (laptop, once)
+
+Both SDKs are installed for the system Python, which the ROS nodes use (2026-11-11:
+`google-genai` 3.1.0, `anthropic` 2.8.0; `pip install --user --break-system-packages <pkg>`).
+Add the key for the provider you use to `~/.bashrc`, never to this repository:
 
 ```bash
-pip install --user --break-system-packages anthropic   # ROS nodes run on the system Python (done 2026-11-11, 2.8.0)
-echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc  # your key; never put it in this repository
+echo 'export GEMINI_API_KEY=...' >> ~/.bashrc        # gemini (aistudio.google.com -> API keys)
+echo 'export ANTHROPIC_API_KEY=sk-ant-...' >> ~/.bashrc   # claude (platform.claude.com -> API keys)
 ```
 
 Open a new terminal (so the key is set) before `ros2 launch security_bringup laptop.launch.xml`.
 The narrator's startup line says which mode is active:
 
 ```
-Narrator ready: 3 sections (A, B, C), LLM claude (claude-opus-5-5, effort low)
-Narrator ready: 3 sections (A, B, C), templates: no Claude credentials (set ANTHROPIC_API_KEY, or run `ant auth login`)
+Narrator ready: 3 sections (A, B, C), LLM gemini (newest flash model, picked on first use)
+Narrator ready: 3 sections (A, B, C), templates: no Gemini credentials (set GEMINI_API_KEY)
 ```
 
-The tag on the dashboard card shows **claude** or **template** for the latest report.
+The tag on the dashboard card shows the provider (**gemini**, **claude**) or **template** for the latest report.
 Rejected key or unknown model: templates for the rest of the run (logged once).
-Network down, timeout or rate limit: the template for that report, Claude again
-after 10-30 s.
+Network down, timeout or rate limit/quota: the template for that report, the LLM
+again after 10-30 s.
 
 Options (`narrator.yaml`): `llm_provider`, `llm_model` ('' = provider default),
-`llm_effort`, `llm_timeout`, `language`.
+`llm_effort` (claude), `llm_timeout`, `language`.
 
 Cost: one short request per reported event (a demo produces a few per minute), a
 few hundred tokens each.
@@ -89,4 +94,5 @@ few hundred tokens each.
 `security_task_manager/test/test_narrator.py`: sections of the dock, waypoints and
 object; template wording; robot vs object position; the Claude path with a fake
 client (request shape, one-line output, refusal and errors fall back to the
-template); any provider through the interface; the real SDK with and without a key.
+template); any provider through the interface; the real SDK with and without a key;
+Gemini model picking, request shape and errors with a fake client.

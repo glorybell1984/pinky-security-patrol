@@ -24,7 +24,7 @@ The whole system also runs on a **fake Pinky** (simulated robot and world) for t
 | Dock options | Two-phase (align, then straight in) and backward docking (camera watches the room while charging), off by default ([docking.md](docs/docking.md)) |
 | Robot signals | Front lamp (`/set_lamp`), LED ring (`/set_led`, police lights on level 3) and LCD face (`/set_emotion`) follow the robot state |
 | Operator | Dashboard: map, object registry, event log, camera, start / stop / pause / go home / emergency stop |
-| Reports in words | "In section C, object #42 is still there and has not moved." an LLM (Claude by default, pluggable) writes each sentence, templates without network ([narrator.md](docs/narrator.md)) |
+| Reports in words | "In section C, object #42 is still there and has not moved." an LLM (Gemini or Claude, pluggable) writes each sentence, templates without network ([narrator.md](docs/narrator.md)) |
 | Logs | `~/patrol_logs/events_<time>.csv`, every decision with positions |
 
 ## Architecture

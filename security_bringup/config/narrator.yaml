@@ -1,13 +1,14 @@
 # Narrator: patrol events -> one short sentence per event, by map section.
 #   "In section A, a suspicious object (#42) has been detected."
-# An LLM writes the sentence through the provider set in llm_provider (claude:
-# anthropic package + ANTHROPIC_API_KEY or "ant auth login"); without it, or on
-# any error or timeout, a fixed template does. See docs/narrator.md.
+# An LLM writes the sentence through the provider set in llm_provider:
+#   gemini: google-genai package + GEMINI_API_KEY
+#   claude: anthropic package + ANTHROPIC_API_KEY (or "ant auth login")
+# Without it, or on any error or timeout, a fixed template does. See docs/narrator.md.
 narrator:
   ros__parameters:
-    llm_provider: claude           # claude | none (templates only); more in narrator.PROVIDERS
-    llm_model: claude-opus-5-5     # '' = the provider's default
-    llm_effort: low                # one sentence: low effort is fast enough
+    llm_provider: gemini           # gemini | claude | none (templates only)
+    llm_model: ''                  # '' = provider default (gemini: newest flash, logged; claude: claude-opus-5-5)
+    llm_effort: low                # claude only: one sentence, low effort is fast enough
     llm_timeout: 8.0               # s per request, then the template
     language: English
     # Sections of police_map2: three bands along the arena (A = dock end, C = far end).

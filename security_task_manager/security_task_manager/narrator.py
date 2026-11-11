@@ -14,6 +14,7 @@ Pure Python apart from each provider's own package (imported lazily), so the
 event -> facts -> sentence logic is unit tested without ROS or a network.
 """
 import json
+import re
 import time
 
 # event name -> what happened, in words the model can rephrase (and the template uses)
@@ -206,8 +207,108 @@ class ClaudeProvider(LLMProvider):
             self.log(f'narrator: Claude error {e.__class__.__name__}: {e}; template used')
 
 
+class GeminiProvider(LLMProvider):
+    """Gemini through Google's official SDK (`pip install google-genai`).
+
+    Credentials: GEMINI_API_KEY or GOOGLE_API_KEY. With no llm_model, the newest
+    plain "flash" model the key can use is picked on the first request (logged).
+    """
+
+    name = 'gemini'
+    SKIP = ('lite', 'image', 'tts', 'audio', 'live', 'embedding', 'exp', 'thinking',
+            'native', 'robotics', 'computer')
+
+    def __init__(self, model='', effort='low', timeout=8.0, client=None, log=print):
+        self.model = model
+        self.log = log
+        self.backoff_until = 0.0
+        self.sdk = self.types = self.errors = None
+        self.client = client
+        try:
+            from google import genai
+            from google.genai import errors, types
+            self.sdk, self.types, self.errors = genai, types, errors
+        except ImportError:
+            if client is None:
+                self.off_reason = ('the google-genai package is not installed '
+                                   '(pip install google-genai)')
+                return
+        if self.client is None:
+            try:
+                # timeout in milliseconds; one retry: a late sentence is useless
+                self.client = self.sdk.Client(http_options=self.types.HttpOptions(
+                    timeout=int(timeout * 1000),
+                    retry_options=self.types.HttpRetryOptions(attempts=2)))
+            except ValueError:                         # no GEMINI_API_KEY / GOOGLE_API_KEY
+                self.off_reason = 'no Gemini credentials (set GEMINI_API_KEY)'
+            except Exception as e:  # noqa: BLE001
+                self.off_reason = f'Gemini client failed ({e.__class__.__name__}: {e})'
+
+    def describe(self):
+        return f'gemini ({self.model or "newest flash model, picked on first use"})'
+
+    def pick_model(self):
+        """Newest plain flash model that supports generateContent."""
+        names = []
+        for m in self.client.models.list():
+            name = (m.name or '').split('/')[-1]
+            actions = m.supported_actions or []
+            if 'flash' in name and 'generateContent' in actions \
+                    and not any(s in name for s in self.SKIP):
+                names.append(name)
+        stable = [n for n in names if 'preview' not in n] or names
+        if not stable:
+            return None
+        # sort by version digits, e.g. gemini-2.5-flash < gemini-3-flash
+        key = lambda n: [int(x) for x in re.findall(r'\d+', n)]  # noqa: E731
+        return sorted(stable, key=key)[-1]
+
+    def complete(self, system, user):
+        if time.monotonic() < self.backoff_until:
+            return None
+        try:
+            if not self.model:
+                self.model = self.pick_model()
+                if not self.model:
+                    self.off_reason = 'no Gemini flash model available for this key'
+                    self.log(f'narrator: {self.off_reason}; templates from now on')
+                    return None
+                self.log(f'narrator: using Gemini model {self.model} '
+                         '(pin it with llm_model in narrator.yaml)')
+            response = self.client.models.generate_content(
+                model=self.model, contents=user,
+                config=self.types.GenerateContentConfig(system_instruction=system,
+                                                        max_output_tokens=2048))
+        except Exception as e:  # noqa: BLE001  (sorted in _on_error; the template always works)
+            self._on_error(e)
+            return None
+        text = response.text if response.candidates else None
+        if not text:
+            self.log('narrator: Gemini gave no text (blocked or empty), using the template')
+        return text or None
+
+    def _on_error(self, e):
+        err = self.errors
+        code = getattr(e, 'code', None)
+        message = str(getattr(e, 'message', '') or e)
+        if err is not None and isinstance(e, err.ClientError) and (
+                code in (401, 403) or (code == 400 and 'API key' in message)):
+            self.off_reason = f'Gemini rejected the API key ({code})'
+            self.log(f'narrator: {self.off_reason}; templates from now on')
+        elif err is not None and isinstance(e, err.ClientError) and code == 404:
+            self.off_reason = f'Gemini model {self.model} not found'
+            self.log(f'narrator: {self.off_reason}; templates from now on')
+        elif err is not None and isinstance(e, err.ClientError) and code == 429:
+            self.backoff_until = time.monotonic() + 30.0
+            self.log('narrator: Gemini rate limit or quota, templates for 30 s')
+        else:                                           # 5xx, network, timeout, other
+            self.backoff_until = time.monotonic() + 10.0
+            self.log(f'narrator: Gemini error {e.__class__.__name__}: {message[:120]}; '
+                     'template used')
+
+
 # llm_provider parameter -> class. Add a provider: subclass LLMProvider, register here.
-PROVIDERS = {'claude': ClaudeProvider}
+PROVIDERS = {'claude': ClaudeProvider, 'gemini': GeminiProvider}
 
 
 def make_provider(name, model='', effort='low', timeout=8.0, log=print):
