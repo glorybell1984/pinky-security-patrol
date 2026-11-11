@@ -102,6 +102,10 @@ class DockConfig:
     restage_run: float = 0.40        # m of dock line in front of the docked pose
     restage_min_run: float = 0.35    # m, approach needs at least this much line
     restage_max_slope: float = 0.35  # sideways error / distance left that still converges
+    # stand still once the marker is found and take the median dock pose, so the
+    # dock line comes from the camera, not from the map prior (AMCL heading can be
+    # 10-40 deg off near the dock on the real robot)
+    settle_at_start: bool = False
     # backward docking (contacts at the rear): always two-phase
     backward: bool = False
     # turn on the spot at docked_distance + this (Pinky: 12 x 12 cm, sweeps 8.5 cm);
@@ -229,6 +233,7 @@ class DockingController:
         self.get_heading = get_heading
         self.imu_ok = get_heading is not None
         self.facing_away = False         # backward docking: turned away from the dock
+        self.on_lock = None              # callback after a still, median dock pose (relocalize)
         self._v = 0.0
         self._w = 0.0
 
@@ -400,6 +405,20 @@ class DockingController:
                 self._sleep()
         self._halt()
         return False
+
+    def lock_on_marker(self, should_stop, is_paused):
+        """After ACQUIRE: stand still, median dock pose. 'ok', 'lost' or 'aborted'."""
+        if not self.cfg.settle_at_start:
+            return 'ok'
+        self.phase = 'LOCK'
+        m = self.settle(should_stop, is_paused)
+        if m == 'aborted':
+            return 'aborted'
+        if m is None:
+            return 'lost'
+        if self.on_lock is not None:
+            self.on_lock()
+        return 'ok'
 
     def needs_restage(self):
         p = self.a.odom_pose()
@@ -602,6 +621,12 @@ class DockingController:
                     return 'aborted'
                 reason = 'dock marker not found'
                 continue
+            lock = self.lock_on_marker(should_stop, is_paused)
+            if lock == 'aborted':
+                return 'aborted'
+            if lock == 'lost':
+                reason = 'marker lost'
+                continue
             if self.needs_restage():
                 p = self.a.odom_pose()
                 x, y, _ = self.est.robot_in_dock(*p)
@@ -615,6 +640,12 @@ class DockingController:
                     if should_stop():
                         return 'aborted'
                     reason = 'dock marker not found'
+                    continue
+                lock = self.lock_on_marker(should_stop, is_paused)
+                if lock == 'aborted':
+                    return 'aborted'
+                if lock == 'lost':
+                    reason = 'marker lost'
                     continue
             self.contact.mark()
             predock = c.predock_distance

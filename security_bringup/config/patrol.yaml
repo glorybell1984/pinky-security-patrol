@@ -67,6 +67,13 @@ traffic_manager:
     dock_settle_time: 1.5
     dock_settle_min_obs: 12
     dock_marker_yaw_gain: 0.2
+    # Lock on the marker as soon as it is found (median dock pose, standing still),
+    # then use it as a landmark: if AMCL disagrees by more than 8 cm / 6 deg, reset
+    # AMCL to the marker's pose. Real robot near the dock: AMCL was 36 cm / 42 deg
+    # off, which put the staging point next to the wall (the wall bumps).
+    dock_settle_at_start: true
+    dock_relocalize_distance: 0.08
+    dock_relocalize_angle_deg: 6.0
     # Dock direction (docs/docking.md). forward: contacts at the front (default,
     # tested). backward: contacts at the rear; the robot lines up facing the dock,
     # turns 180 deg and reverses in, so the camera watches the room while charging.

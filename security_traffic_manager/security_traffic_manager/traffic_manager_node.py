@@ -31,7 +31,7 @@ import threading
 import time
 
 import rclpy
-from geometry_msgs.msg import Pose, PoseArray, PoseStamped
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped, PoseWithCovarianceStamped
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -104,6 +104,10 @@ class TrafficManager(Node):
         p('dock_settle_time', 0.6)              # s still before measuring
         p('dock_settle_min_obs', 4)             # marker readings needed while still
         p('dock_marker_yaw_gain', 1.0)          # weight of single angle readings while moving
+        p('dock_settle_at_start', False)        # median dock pose before the approach
+        # reset AMCL from the dock marker when it is this far off (0 = never)
+        p('dock_relocalize_distance', 0.0)      # m
+        p('dock_relocalize_angle_deg', 6.0)
         p('dock_final_speed', 0.05)             # m/s straight run onto the contacts
         # forward: contacts at the front, camera sees the marker to the end.
         # backward: contacts at the rear; align facing the dock, turn 180, reverse in.
@@ -154,6 +158,7 @@ class TrafficManager(Node):
             align_heading_tolerance=math.radians(g('dock_align_heading_tolerance_deg')),
             settle_time=g('dock_settle_time'),
             settle_min_obs=int(g('dock_settle_min_obs')),
+            settle_at_start=bool(g('dock_settle_at_start')),
             final_speed=g('dock_final_speed'),
             backward=self.dock_backward,
         )
@@ -164,6 +169,10 @@ class TrafficManager(Node):
                                         self.dock_cfg, self.get_us_range,
                                         g('dock_contact_detect'),
                                         self.get_imu_heading if g('imu_topic') else None)
+        self.docker.on_lock = self.relocalize_from_dock
+        self.reloc_dist = g('dock_relocalize_distance')
+        self.reloc_angle = math.radians(g('dock_relocalize_angle_deg'))
+        self.initialpose_pub = self.create_publisher(PoseWithCovarianceStamped, '/initialpose', 1)
         self.docked = bool(g('start_docked'))
 
         # state
@@ -470,6 +479,45 @@ class TrafficManager(Node):
             self.activity = 'CHARGING'
             self.emit({'event': 'charger_reached', 'message': 'Docked: charging contacts on'})
         return outcome
+
+    def relocalize_from_dock(self):
+        """Robot standing still with a median dock pose: the marker is a landmark at
+        a known map pose (from charger_pose), so it gives the robot's true map pose.
+        If AMCL is off by more than the limits, reset AMCL there (/initialpose)."""
+        p = self.adapter.odom_pose()
+        amcl = self.adapter.pose
+        est = self.dock_est
+        if p is None or amcl is None or est.count == 0:
+            return
+        rx, ry, ryaw = p
+        # marker in the robot frame (from the odom-frame estimate)
+        dx, dy = est.x - rx, est.y - ry
+        bx = dx * math.cos(ryaw) + dy * math.sin(ryaw)
+        by = -dx * math.sin(ryaw) + dy * math.cos(ryaw)
+        byaw = wrap_angle(est.yaw - ryaw)
+        mx, my, mface = self.dock_marker_map()
+        yaw = wrap_angle(mface - byaw)                       # robot heading in the map
+        x = mx - (bx * math.cos(yaw) - by * math.sin(yaw))
+        y = my - (bx * math.sin(yaw) + by * math.cos(yaw))
+        ax, ay, ayaw = amcl
+        d, a = math.hypot(x - ax, y - ay), wrap_angle(yaw - ayaw)
+        msg = (f'AMCL vs dock marker: {d * 100:.0f} cm, {math.degrees(a):+.0f} deg '
+               f'(marker says ({x:.2f}, {y:.2f}, {math.degrees(yaw):.0f} deg))')
+        if self.reloc_dist <= 0 or (d <= self.reloc_dist and abs(a) <= self.reloc_angle):
+            self.emit({'event': 'dock_localization', 'message': msg})
+            return
+        out = PoseWithCovarianceStamped()
+        out.header.frame_id = self.adapter.global_frame
+        out.header.stamp = self.get_clock().now().to_msg()
+        out.pose.pose.position.x, out.pose.pose.position.y = x, y
+        out.pose.pose.orientation.z = math.sin(yaw / 2)
+        out.pose.pose.orientation.w = math.cos(yaw / 2)
+        cov = [0.0] * 36
+        cov[0] = cov[7] = 0.03 ** 2
+        cov[35] = math.radians(3.0) ** 2
+        out.pose.covariance = cov
+        self.initialpose_pub.publish(out)
+        self.emit({'event': 'dock_relocalized', 'message': msg + ': AMCL reset to the marker pose'})
 
     def on_dock_calibrate(self, req, res):
         if self.dock_backward:
