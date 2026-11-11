@@ -1,26 +1,49 @@
 <!--
   FAKE robot: the whole system without Pinky, Nav2 or a camera.
-    ros2 launch security_bringup fake_robot.launch.xml
+    ros2 launch security_bringup fake_robot.launch.xml                 (built-in 7 x 5 m room)
+    ros2 launch security_bringup fake_robot.launch.xml world:=police   (the real demo arena)
   Then open security_ui/web/index.html and use the Simulation panel,
-  or publish a command (pickup 7, hide 7, remove 5, place 9 2.0 2.0)
+  or publish a command (pickup 7, hide 7, remove 5, place 9 2.0 2.0;
+  in the police world: pickup 42, hide 42)
   on the /fake_pinky/command topic (std_msgs/msg/String).
   Note: XML comments cannot contain two dashes in a row.
 -->
 <launch>
   <arg name="rosbridge" default="true"/>
+  <arg name="world" default="room" description="room: built-in room, police: maps/police_map2.yaml"/>
   <let name="config_dir" value="$(find-pkg-share security_bringup)/config"/>
+  <let name="police" value="$(eval '\'$(var world)\' == \'police\'')"/>
 
-  <node pkg="security_bringup" exec="fake_pinky" output="screen">
-    <param from="$(var config_dir)/fake.yaml"/>
-  </node>
+  <!-- built-in room -->
+  <group unless="$(var police)">
+    <node pkg="security_bringup" exec="fake_pinky" output="screen">
+      <param from="$(var config_dir)/fake.yaml"/>
+    </node>
+    <node pkg="security_traffic_manager" exec="traffic_manager" output="screen">
+      <param from="$(var config_dir)/patrol_fake.yaml"/>
+    </node>
+    <node pkg="security_task_manager" exec="task_manager" output="screen">
+      <param from="$(var config_dir)/rules.yaml"/>
+      <param name="view_distance" value="2.0"/>   <!-- fake camera sees 2.2 m -->
+      <param name="auto_start_patrol" value="true"/>
+    </node>
+  </group>
 
-  <node pkg="security_traffic_manager" exec="traffic_manager" output="screen">
-    <param from="$(var config_dir)/patrol_fake.yaml"/>
-  </node>
-
-  <node pkg="security_task_manager" exec="task_manager" output="screen">
-    <param from="$(var config_dir)/rules.yaml"/>
-  </node>
+  <!-- real demo arena: walls from the SLAM map, same rules as the real robot -->
+  <group if="$(var police)">
+    <node pkg="security_bringup" exec="fake_pinky" output="screen">
+      <param from="$(var config_dir)/fake_police.yaml"/>
+      <param name="map_yaml" value="$(find-pkg-share security_bringup)/maps/police_map2.yaml"/>
+    </node>
+    <node pkg="security_traffic_manager" exec="traffic_manager" output="screen">
+      <param from="$(var config_dir)/patrol_fake_police.yaml"/>
+    </node>
+    <node pkg="security_task_manager" exec="task_manager" output="screen">
+      <param from="$(var config_dir)/rules.yaml"/>
+      <param name="camera_hfov" value="1.0423"/>   <!-- real Pinky camera, measured -->
+      <param name="auto_start_patrol" value="true"/>
+    </node>
+  </group>
 
   <include if="$(var rosbridge)"
            file="$(find-pkg-share rosbridge_server)/launch/rosbridge_websocket_launch.xml"/>

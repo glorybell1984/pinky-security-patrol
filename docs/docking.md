@@ -20,7 +20,7 @@ to a staging point, and the docking controller does the last 0.5 m.
 | Step | What happens |
 |---|---|
 | Staging | Nav2 goal 0.6 m in front of the docked pose, facing the dock |
-| Acquire | Wait for the dock marker (ID 0). If not seen, turn slowly ±35° to find it |
+| Acquire | Wait for the dock marker (ID 66). If not seen, turn slowly ±35° to find it |
 | Approach | Follow the dock's centre line: aim at a point 20 cm ahead on the line (pure pursuit), slow down near the end, acceleration limited |
 | Contact | Stop at the docked distance. Wait for the battery voltage to rise (charger on). Push 1 cm once if needed |
 | Retry | No contact, marker lost, or not lined up in the last 8 cm: back off 30 cm and try again (2 retries), then Nav2 to staging again (3 times) |
@@ -40,6 +40,87 @@ kept in the **odom frame**, so between camera frames, and in the last
 centimetres where the marker may be too close to see, odometry keeps the
 control smooth.
 
+## Two-phase docking (option)
+
+Set `dock_predock_distance` (e.g. `0.25`) in `patrol.yaml` to dock in two phases
+instead of following the marker all the way in:
+
+| Phase | What happens |
+|---|---|
+| 1. Approach | Follow the dock line as above, but stop at the pre-dock point (0.25 m from the marker) |
+| Align | Stand still 0.6 s so the marker estimate settles, then check the error. Heading off: turn on the spot. Off the line: turn, drive about 6 cm, turn back. Up to 2 corrections, then back off and retry |
+| 2. Final | Straight in on odometry only, at 5 cm/s. The marker is not needed |
+
+The dashboard log shows the measured error at the pre-dock point
+(`Docking: aligned at the pre-dock point (sideways +3 mm, heading +0.7 deg, ...)`),
+which is useful for tuning on the real robot.
+
+**Default is off (0.0)**, because in simulation single-phase is faster and just as precise:
+
+| 50 dockings, Nav2 error ±15 cm / ±14°, 3 % wheel slip | Contacts | Retries | Max sideways | Median time | Worst |
+|---|---|---|---|---|---|
+| Single-phase (`dock_predock_distance: 0.0`) | 50/50 | 1 | 6 mm | 10 s | 20 s |
+| Two-phase (`0.25`) | 50/50 | 1-3 | 6-9 mm | 13 s | 35 s |
+
+Why: the marker angle gets *more* precise as the robot gets closer (about ±2.3°
+at 0.3 m, ±1.3° at 0.2 m), so single-phase keeps correcting with its best data,
+while two-phase stops using the camera exactly there. And a robot that cannot
+move sideways needs a stop-turn-drive-turn to fix a sideways error, which is slow.
+
+**Use two-phase when** the camera cannot read the marker reliably up close
+(blurry, marker leaves the image, flicker in the last 20 cm): single-phase then
+reports "marker lost" or "not lined up", two-phase does not need the marker below
+the pre-dock point. Tolerances: `dock_align_lateral_tolerance` (6 mm) and
+`dock_align_heading_tolerance_deg` (1.5°).
+
+Tests: `security_traffic_manager/test/test_docking_sim.py` runs the real
+controller against a simulated robot, camera and dock on a fake clock
+(both modes, 20 dockings each, in under a second).
+
+## Backward docking (option)
+
+`dock_direction: backward` puts the contacts at the robot's **rear**. While
+charging, the camera then faces the room and keeps reporting objects, and
+leaving the dock is a straight drive forward.
+
+```
+staging ──> approach facing the marker ──> ALIGN at docked + 10 cm ──> TURN 180° ──> reverse in
+                                            (sideways error only)       (IMU)        (odometry, no marker)
+```
+
+The camera cannot see the marker while reversing, so the **180° turn decides
+the result**: a heading error of e.g. 5° becomes about 2 cm sideways after 20 cm
+of reversing. Wheel odometry misjudges turns by a few percent, the BNO055 IMU by
+about 1 %. The turn is computed from the heading measured at the pre-dock point,
+so a heading error there is corrected by the turn; only the sideways error has
+to be within `dock_align_lateral_tolerance`.
+
+| 50 dockings, Nav2 error ±15 cm / ±14°, 3 % wheel slip | Contacts | Max sideways | Max heading | Median time | Worst |
+|---|---|---|---|---|---|
+| Forward (default) | 50/50 | 6 mm | 2.0° | 10 s | 20 s |
+| Backward, IMU (1 % turn error) | 50/50 | 10 mm | 3.2° | 17 s | 40 s |
+| Backward, IMU (2 % turn error) | 50/50 | 12 mm | 4.5° | 17 s | 46 s |
+| Backward, wheel odometry only | 43/50 | 16 mm | 6.5° | 17 s | 39 s |
+
+Contacts were counted as touching within ±12 mm along, ±15 mm sideways and ±5°,
+the same as Fake Pinky. Backward has less margin, so the V-shaped guide and wide
+pads are worth building for it.
+
+**Setup:**
+1. Run the IMU on the robot: `ros2 run pinky_imu_bno055 main_node`, check
+   `ros2 topic echo /imu_raw --once` (orientation not all zero).
+2. `patrol.yaml`: `dock_direction: backward`, `imu_topic: /imu_raw`.
+3. Put the robot on the dock (rear contacts touching) and call
+   `/traffic/dock_calibrate`: it gives `charger_pose`. The camera cannot see the
+   marker from there, so measure `dock_docked_distance` by hand: marker face to
+   the robot's centre (`base_footprint`, middle of the wheel axle).
+4. If the IMU is mounted so that it turns the other way than the wheels, the
+   dashboard log says `IMU turns the other way than the wheels` and odometry is used.
+
+The pre-dock point is `dock_docked_distance` + 10 cm (Pinky is 12 x 12 cm and
+needs about 8.5 cm to turn on the spot). Closer is better: the marker angle is
+more precise there (0.25 m: max 10 mm sideways; 0.35 m: 15 mm).
+
 ## Fake Pinky results
 
 | Test | Result |
@@ -56,7 +137,7 @@ Build the dock so it forgives about **±2 cm and ±5°**.
 
 | Part | Advice |
 |---|---|
-| Marker | ID 0, DICT_4X4_50: `ros2 run security_perception make_markers --ids 0 --out ~/markers`. Print so the black square is 6-8 cm, set `dock_marker_size` |
+| Marker | ID 66, DICT_5X5_100: `ros2 run security_perception make_markers --ids 66 --out ~/markers`. The demo print is 4 cm; 6-8 cm gives a steadier angle and a longer range. Set `dock_marker_size` to the black square side |
 | Marker place | On the dock face, centred, at camera height. It must still be fully visible when docked (marker about 15 cm in front of the camera) |
 | Contacts | Wide pads on the dock (3-4 cm), spring contacts on the robot. Polarity: make it impossible to touch + to - (e.g. pads at different heights) |
 | Guides | A V-shaped funnel in front of the contacts pushes the last 1-2 cm of error into place |
@@ -71,7 +152,7 @@ turn 180° and reverse on odometry alone; that is not implemented.
 
 1. Build the dock and put it against a wall, free space of about 1 m in front of it.
 2. Put the robot on the dock by hand, contacts touching. Start bringup, Nav2,
-   `camera_publisher.py` and `patrol_system.launch.xml`.
+   `camera_server.py` and `patrol_system.launch.xml`.
 3. Calibrate:
    ```bash
    ros2 service call /traffic/dock_calibrate std_srvs/srv/Trigger

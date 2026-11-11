@@ -518,6 +518,13 @@ class TaskManager(Node):
                 events = self.registry.acknowledge(req.marker_id)
             for ev in events:
                 self.emit(ev)
+            stop = (events and req.marker_id == self.follow_marker
+                    and self.follow_handle is not None)
+        if stop:
+            # acknowledged while following it: end the follow, back to patrol
+            self.follow_handle.cancel_goal_async()
+            self.emit({'event': 'follow_stop', 'marker_id': req.marker_id,
+                       'message': f'#{req.marker_id} acknowledged: follow stopped, patrol resumes'})
         res.success = bool(events)
         res.message = events[0]['message'] if events else f'#{req.marker_id} not in registry'
         return res
@@ -572,9 +579,14 @@ class TaskManager(Node):
             res.success = False
             res.message = 'Not following'
             return res
+        marker = self.follow_marker
+        with self.lock:
+            # the operator decided: do not start following this object again
+            for ev in self.registry.acknowledge(marker):
+                self.emit(ev)
         self.follow_handle.cancel_goal_async()
         res.success = True
-        res.message = 'Follow cancelled'
+        res.message = f'Follow cancelled, #{marker} acknowledged'
         return res
 
     # ================================================================ outputs

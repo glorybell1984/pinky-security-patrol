@@ -1,0 +1,30 @@
+# Traffic manager for Fake Pinky in the real arena (police_map2). The waypoints
+# and dock are a DRAFT from the map's free space (checked: all reachable, the
+# object is visible from WP3). Use them as a starting point for patrol.yaml.
+traffic_manager:
+  ros__parameters:
+    robot_id: pinky1
+    namespace: ""
+    global_frame: map
+    base_frame: base_footprint
+    # The arena is one diagonal corridor with open ends: out and back.
+    waypoints: [-2.14, -0.03, -33.9,    # WP1 near the dock
+                -1.14, 0.56, 56.1,      # WP2 up the corridor
+                -0.09, 2.03, 56.1,      # WP3 far end, faces object 42 (0.4 m ahead)
+                -0.44, 2.32, 146.1,     # WP4 far corner
+                -0.75, 1.14, -123.9,    # WP5 back
+                -1.57, 0.01, -123.9]    # WP6
+    nav_retry: 1
+    waypoint_pause: 1.0
+    pose_timeout: 3.0
+    follow_update_period: 0.5
+    follow_min_distance: 0.5
+    follow_replan_distance: 0.2
+    charger_pose: [-2.74, -0.05, 146.1]  # real dock (fake_police.yaml dock_pose)
+    dock_enabled: true
+    dock_docked_distance: 0.05
+    dock_predock_distance: 0.35      # two-phase, as on the real robot
+    dock_align_lateral_tolerance: 0.015
+    dock_align_heading_tolerance_deg: 3.0
+    start_docked: true
+    charger_retries: 3

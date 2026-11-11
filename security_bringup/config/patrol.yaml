@@ -2,7 +2,10 @@
 # Waypoints are flat x, y, yaw_deg triples in the map frame. All values must be
 # written with a decimal point (0.0, not 0) or ROS rejects the list type.
 #
-# TODO(demo): replace with points from your own map:
+# Map: maps/police_map2.yaml (SLAM, 2026-11-11, dock in place; arena runs diagonally).
+# Waypoints and charger_pose: the layout rehearsed on Fake Pinky, converted from
+# police_map (rotate -33.85 deg, shift -2.805, -0.130; walls agree to 98 % within 10 cm). Check them on
+# the robot and move them if needed:
 #   RViz -> Publish Point -> click -> ros2 topic echo /clicked_point --once
 traffic_manager:
   ros__parameters:
@@ -13,11 +16,24 @@ traffic_manager:
     lamp_topic: /fleet/lamp        # mode for the dashboard (OFF / BLINK / ON)
     lamp_service: /set_lamp        # pinky_lamp_control on the robot, "" to disable
     emotion_service: /set_emotion  # pinky_emotion LCD faces, "" to disable
+    led_service: /set_led          # pinky_led ring: police lights on level 3, "" to disable
     cmd_vel_topic: ""              # default: <namespace>/cmd_vel
-    waypoints: [0.15, -3.61, 0.0,
-                0.94, -3.38, 90.0,
-                0.94, -2.40, 180.0,
-                0.15, -2.40, -90.0]
+    # The arena is one diagonal corridor with open ends: out and back.
+    waypoints: [-2.14, -0.03, -33.9,    # WP1 near the dock
+                -1.14, 0.56, 56.1,      # WP2 up the corridor
+                -0.09, 2.03, 56.1,      # WP3 far end (object 42 draft place, 0.4 m ahead)
+                -0.44, 2.32, 146.1,     # WP4 far corner
+                -0.75, 1.14, -123.9,    # WP5 back
+                -1.57, 0.01, -123.9]    # WP6
+    # Alternative: JW's 8-point route (dev-jw), converted to police_map2 (all free, all legs plannable):
+    # waypoints: [-2.43, 0.21, -75.9,
+    #             -2.31, -0.24, 2.1,
+    #             -1.65, -0.22, 55.1,
+    #             -1.15, 0.51, 62.1,
+    #             -0.73, 1.29, -11.9,
+    #             -0.47, 1.23, 85.1,
+    #             -0.40, 2.15, 2.1,
+    #             -0.18, 2.15, -138.9]
     nav_retry: 1
     waypoint_pause: 1.0            # s, look around a moment at each waypoint
     pose_timeout: 3.0
@@ -27,23 +43,53 @@ traffic_manager:
     # Where the robot waits to be charged (x, y, yaw_deg in the map frame). Pick a
     # free spot next to a power socket; the robot drives there on low battery.
     # TODO(demo): set from RViz Publish Point, like the waypoints.
-    charger_pose: [0.15, -3.61, 0.0]   # robot pose WHEN DOCKED, facing the dock
+    charger_pose: [-2.74, -0.05, 146.1]  # robot pose WHEN DOCKED (converted; refine from the marker)
     charger_retries: 3
 
     # Dock with charging contacts (docs/docking.md). Calibrate: put the robot on
     # the dock by hand, then  ros2 service call /traffic/dock_calibrate std_srvs/srv/Trigger
     # and copy dock_docked_distance and charger_pose from the answer.
     dock_enabled: true
-    dock_docked_distance: 0.15       # TODO(demo): calibrate
+    dock_docked_distance: 0.05       # measured: front 1 cm from marker 66 + axle->front 3.9 cm
+                                     # (the map shows the clear dock box 10 cm deeper: LiDAR sees through it)
     dock_staging_distance: 0.6       # Nav2 stops this far in front of the dock
     dock_approach_speed: 0.08        # m/s on the dock line
     dock_min_speed: 0.02
     dock_lateral_tolerance: 0.015    # m allowed sideways error in the last 8 cm
     dock_heading_tolerance_deg: 6.0
     dock_retries: 2
-    dock_contact_detect: true        # wait for a battery voltage rise on contact
+    dock_contact_detect: false       # demo dock has no charger: docked = at the docked distance
     dock_contact_rise: 0.12          # V
     dock_contact_timeout: 12.0       # s (/battery/voltage comes every 5 s)
     dock_undock_distance: 0.35
     dock_us_stop_range: 0.0          # m, stop on the ultrasonic (pinky_sensor_adc); 0 = off
+    # Two-phase docking (docs/docking.md): stop at this distance from the marker,
+    # line up while standing still, then drive straight in without the marker.
+    # 0 = single-phase (default, faster). Try 0.25 if the marker is lost up close.
+    dock_predock_distance: 0.35      # two-phase: the fixed-focus camera cannot read marker 66
+                                     # when docked (10 cm, all blur). Lower if it stays sharp closer
+    dock_align_lateral_tolerance: 0.015    # m; demo dock has no contacts (6 mm for real contacts)
+    dock_align_heading_tolerance_deg: 3.0  # simulation at this dock: 40/40, median 14 s
+    # Marker 66 (4 cm) on the real robot: position steady to +-2 mm, single angle
+    # readings jump +-10-20 deg. Stand still 1.5 s and take the median; while
+    # driving, trust the dock direction from the map (AMCL +-5 deg) more than one
+    # reading. Simulation with the measured noise: 33/40 -> 40/40, median 37 -> 19 s
+    dock_settle_time: 1.5
+    dock_settle_min_obs: 12
+    dock_marker_yaw_gain: 0.2
+    # Lock on the marker as soon as it is found (median dock pose, standing still),
+    # then use it as a landmark: if AMCL disagrees by more than 8 cm / 6 deg, reset
+    # AMCL to the marker's pose. Real robot near the dock: AMCL was 36 cm / 42 deg
+    # off, which put the staging point next to the wall (the wall bumps).
+    dock_settle_at_start: true
+    dock_relocalize_distance: 0.08
+    dock_relocalize_angle_deg: 6.0
+    # Dock direction (docs/docking.md). forward: contacts at the front (default,
+    # tested). backward: contacts at the rear; the robot lines up facing the dock,
+    # turns 180 deg and reverses in, so the camera watches the room while charging.
+    # charger_pose is the robot pose when docked either way. For backward, measure
+    # dock_docked_distance by hand and set imu_topic (wheel odometry alone misses
+    # the contacts about 1 time in 4 in simulation).
+    dock_direction: forward
+    imu_topic: ""                  # /imu_raw with pinky_imu_bno055 running on the robot
     start_docked: false              # true if the robot starts on the dock
