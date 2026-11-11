@@ -76,6 +76,16 @@ class OpenCVSource:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         if not self.cap.isOpened():
             raise RuntimeError(f'cannot open video device {device}')
+        # On a Pi with the camera busy, /dev/video0 can open but never deliver a
+        # frame (seen on the Pinky 2026-11-11): fail now instead of "15 Hz" of nothing.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            ok, frame = self.cap.read()
+            if ok and frame is not None:
+                return
+            time.sleep(0.05)
+        self.cap.release()
+        raise RuntimeError(f'video device {device} opens but gives no frames')
 
     def read(self):
         ok, frame = self.cap.read()
