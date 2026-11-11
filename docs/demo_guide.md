@@ -32,6 +32,27 @@ The fake world is a 7 m x 5 m room with two boxes. Three marked objects:
 
 A lap takes about one minute.
 
+### In the real arena (police_map)
+
+```bash
+ros2 launch security_bringup fake_robot.launch.xml world:=police
+```
+
+Same system, but the world is `maps/police_map2.yaml`: walls and obstacles from the
+SLAM map, a grid planner (like Nav2) around them, no detection through walls, marker
+42 seen within 0.6 m only. Draft layout, checked against the map:
+
+| Item | Where (map frame) | File |
+|---|---|---|
+| Dock | robot docked at (0.15, 0.10) facing the bottom wall | `fake_police.yaml` `dock_pose`, `patrol_fake_police.yaml` `charger_pose` |
+| Object #42 | (1.15, 3.70), top end of the corridor | `fake_police.yaml` `objects` |
+| Waypoints | out and back along the corridor, WP3 faces #42 at 0.4 m | `patrol_fake_police.yaml` |
+
+Rehearsal result: dock -> patrol -> #42 level 1 -> pass 2 level 2 hold -> `pickup 42`
+-> level 3 follow -> lost -> patrol -> Go home -> docked, no navigation failures.
+The follow is lost after about 5 s: the robot follows at 0.7 m but the 2.7 cm marker
+is only readable to about 0.6 m (see "What is left").
+
 ### Scenario (about 4 minutes)
 
 | Time | What to do | What happens |
@@ -105,7 +126,8 @@ ros2 run pinky_emotion emotion_server              # optional, LCD faces
 python3 ~/camera_server.py                         # Flask camera stream, see "Camera on the robot"
 
 # ---- Laptop
-ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map.yaml
+ros2 launch pinky_navigation bringup_launch.xml map:=$(ros2 pkg prefix security_bringup)/share/security_bringup/maps/police_map2.yaml \
+    params_file:=$(ros2 pkg prefix security_bringup)/share/security_bringup/config/nav2_arena.yaml
 ros2 launch pinky_navigation nav2_view.launch.xml  # RViz: 2D Pose Estimate first!
 ros2 launch security_bringup patrol_system.launch.xml
 ```
@@ -163,10 +185,10 @@ The simulator world has no ArUco markers, so this tests patrol, pause, e-stop an
 
 | # | Task | Where | How to check |
 |---|---|---|---|
-| 1 | **Camera server** on the robot | `camera_server.py --rotate --swap-rb --width --fps`, `stream_url` in perception.yaml | Dashboard live view: upright, correct colors; `/stats` fps close to target |
-| 2a | **Class markers?** | `ros2 run security_perception find_dictionary` with a marker in front of the camera | Prints the dictionary; set `aruco_dictionary` |
-| 2 | **Print ArUco markers** (DICT_4X4_50) | `ros2 run security_perception make_markers --ids 3 5 7` | Black square = `marker_size` (default 10 cm). Measure it. (The class pinkylib markers are a different set; use ours) |
-| 3 | **Test detection** | Dashboard camera panel shows boxes + distance | Distance within ~10 cm at 1 m. Find the max detection distance |
+| 1 | **Camera** on the robot | `camera_publisher.py` (ROS, default) or `camera_server.py` + `image_source: http`; params `rotate`, `swap_rb` | Dashboard camera: upright, correct colors, ~15 Hz. Pinky Pro with pinkylib: upright with `rotate: 0` (2026-11-11) |
+| 2a | **Markers of unknown origin?** | `ros2 run security_perception find_dictionary` with a marker in front of the camera | Prints the dictionary; set `aruco_dictionary` |
+| 2 | **ArUco markers** (DICT_5X5_100): done. 66 = dock (4 cm), 42 = object (2.7 cm) | `perception.yaml`: `aruco_dictionary`, `dock_marker_id`, `marker_size`, `dock_marker_size` | Black square sizes match the prints. Small markers: check the detection range (step 3) |
+| 3 | **Test detection** | Dashboard camera panel shows boxes + distance | Find the max detection distance. Synthetic images (640x480) give: 42 (2.7 cm) reliable to ~0.5 m, 66 (4 cm) to ~1.2 m. Set `view_distance` (rules.yaml) and `max_detect_distance` (perception.yaml) to what the real camera reaches. Patrol waypoints must pass the object within that distance, facing it |
 | 4 | **Camera FOV** | `camera_hfov` in `perception.yaml` | Marker at 1 m, 30 cm to the side: map position within 5 cm. If off, adjust `camera_hfov` |
 | 5 | **Map** | `ros2 launch pinky_navigation map_building.launch.xml` -> teleop -> `map_saver_cli -f <name>` | Map loads in Nav2, AMCL localizes |
 | 6b | **Home dock** | `config/patrol.yaml` `charger_pose`, `dock_docked_distance` | Build the dock, then `ros2 service call /traffic/dock_calibrate std_srvs/srv/Trigger` with the robot on it. See [docking.md](docking.md) |

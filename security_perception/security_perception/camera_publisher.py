@@ -53,7 +53,8 @@ class CameraPublisher(Node):
         p('height', 480)
         p('fps', 15.0)
         p('jpeg_quality', 80)
-        p('rotate', 180)                   # Pinky Pro image comes out upside down (found by JW)
+        p('rotate', 0)                     # pinkylib image is upright on our Pinky Pro (2026-11-11);
+                                           # JW saw it upside down (other backend?): use rotate:=180 then
         p('swap_rb', False)                # True if red and blue look swapped
         p('topic', '/camera/image_raw/compressed')
         p('frame_id', 'front_camera_link')

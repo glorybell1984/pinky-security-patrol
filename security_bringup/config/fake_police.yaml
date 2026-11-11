@@ -1,0 +1,23 @@
+# Fake Pinky in the REAL demo arena (maps/police_map2.yaml, loaded by the launch:
+#   ros2 launch security_bringup fake_robot.launch.xml world:=police
+# Walls and obstacles come from the map. Object and dock places are a DRAFT
+# (picked from the map's free space); move them to where they will really be.
+fake_pinky:
+  ros__parameters:
+    start_pose: [-2.74, -0.05, 146.1]      # on the dock (patrol_fake_police.yaml charger_pose)
+    dock_pose: [-2.74, -0.05, 146.1]   # real dock, marker 66 on its front
+    dock_docked_distance: 0.05
+    dock_marker_min_range: 0.25          # real camera: marker blurred when close (unmeasured)
+    linear_speed: 0.2                    # Pinky Nav2: 0.2 m/s
+    angular_speed: 1.0
+    objects: [42.0, 0.21, 2.30]       # DRAFT: marker 42 at the far end of the corridor
+    carry_path: [-0.05, 2.00, -0.64, 1.31, -1.14, 0.56, -2.00, -0.01]   # "pickup 42" walks it down
+    person_speed: 0.15
+    hide_after_carry: 4.0
+    camera_hfov: 1.0423                  # real Pinky camera, measured (perception.yaml)
+    detect_range: 0.6                    # 2.7 cm marker: readable to about 0.5-0.6 m
+    detect_noise: 0.02
+    detect_rate: 10.0
+    robot_radius: 0.07                   # m, collision (Pinky 12 x 12 cm); paths keep +3 cm
+    plan_clearance: 0.15
+    scenario: [""]

@@ -11,9 +11,16 @@ NONE = None
 
 
 def action_for(event, obj):
-    """Return the action for a registry event dict, or None."""
+    """Return the action for a registry event dict, or None.
+
+    An object the operator acknowledged triggers nothing any more (no hold, no
+    follow): on the real robot a static marker read as "moving" was followed
+    again on every sighting after it was acknowledged.
+    """
     name = event['event']
-    if name == 'seen_again' and obj is not None and not obj.acknowledged:
+    if obj is not None and obj.acknowledged:
+        return NONE
+    if name == 'seen_again':
         return HOLD
     if name in ('moving', 'reacquired'):
         return FOLLOW

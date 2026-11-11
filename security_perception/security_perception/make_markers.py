@@ -1,6 +1,6 @@
 """Generate printable ArUco marker images.
 
-    ros2 run security_perception make_markers --ids 3 5 7 --out ~/markers
+    ros2 run security_perception make_markers --ids 42 66 --out ~/markers
 
 Prints one PNG per ID (with a white border and the ID written underneath).
 Print them so the black square is exactly the `marker_size` set in
@@ -22,8 +22,8 @@ def make_marker(dictionary, marker_id, side_px):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--ids', type=int, nargs='+', default=[3, 5, 7])
-    parser.add_argument('--dict', default='DICT_4X4_50')
+    parser.add_argument('--ids', type=int, nargs='+', default=[42, 66])
+    parser.add_argument('--dict', default='DICT_5X5_100')
     parser.add_argument('--px', type=int, default=600, help='marker side in pixels')
     parser.add_argument('--out', default='~/markers')
     args = parser.parse_args()

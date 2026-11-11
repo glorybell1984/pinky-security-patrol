@@ -4,8 +4,8 @@
   Robot:  ros2 launch pinky_bringup bringup_robot.launch.xml
           ros2 run pinky_lamp_control main_node
           ros2 run pinky_emotion emotion_server        (optional, LCD faces)
-          python3 camera_server.py      (Flask camera stream)
-  Laptop: ros2 launch pinky_navigation bringup_launch.xml map:=<police_map.yaml path>
+          python3 camera_publisher.py   (ROS camera, default; or camera_server.py + image_source:=http)
+  Laptop: ros2 launch pinky_navigation bringup_launch.xml map:=<path>/police_map2.yaml params_file:=<path>/nav2_arena.yaml
           ros2 launch pinky_navigation nav2_view.launch.xml   (2D Pose Estimate)
           ros2 launch security_bringup patrol_system.launch.xml
 

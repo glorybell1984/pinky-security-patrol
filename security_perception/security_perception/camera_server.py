@@ -278,7 +278,7 @@ def main():
     ap.add_argument('--height', type=int, default=480)
     ap.add_argument('--fps', type=float, default=10.0)
     ap.add_argument('--quality', type=int, default=70, help='JPEG quality 1-100')
-    ap.add_argument('--rotate', type=int, default=180, help='0, 90, 180, 270 (Pinky Pro: 180)')
+    ap.add_argument('--rotate', type=int, default=0, help='0, 90, 180, 270 (upright with pinkylib on our Pinky Pro)')
     ap.add_argument('--swap-rb', action='store_true', help='if red and blue look swapped')
     ap.add_argument('--port', type=int, default=5000)
     ap.add_argument('--test-ids', type=int, nargs='+', default=[7],

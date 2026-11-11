@@ -1,0 +1,59 @@
+<!--
+  ROBOT side in one launch: everything that runs ON the Pinky Pro.
+
+  Uses only Pinky's own packages (pinky_pro workspace on the robot) and our camera
+  scripts, so this repository does not have to be built on the robot. Copy three
+  files (camera_publisher.py imports its camera code from camera_server.py):
+
+    scp robot.launch.xml camera_publisher.py camera_server.py pinky@<robot-ip>:~/
+    ssh pinky@<robot-ip>
+    ros2 launch ~/robot.launch.xml                      # everything, domain 17
+    ros2 launch ~/robot.launch.xml emotion:=false       # without the LCD faces
+    ros2 launch ~/robot.launch.xml camera:=http         # Flask camera_server.py instead
+    ros2 launch ~/robot.launch.xml rotate:=180          # if the image is upside down
+
+  Starts:
+    Pinky bringup      wheels + odometry, LiDAR, battery   (pinky_bringup bringup_robot)
+    lamp               front lamp       /set_lamp          (pinky_lamp_control)
+    led                LED ring         /set_led           (pinky_led)
+    emotion            LCD faces        /set_emotion       (pinky_emotion)
+    camera             ros:  camera_publisher.py -> /camera/image_raw/compressed
+                       http: camera_server.py   -> http://<robot-ip>:5000/video_feed
+                       none: no camera
+    imu, adc           optional: BNO055 /imu_raw, ultrasonic + IR (pinky_sensor_adc)
+
+  ROS_DOMAIN_ID is set for every process started here (default 17, the laptop's
+  domain), so a forgotten "export ROS_DOMAIN_ID" in the robot shell does not matter.
+  Note: XML comments cannot contain two dashes in a row.
+-->
+<launch>
+  <arg name="domain" default="17" description="ROS_DOMAIN_ID for all robot nodes (same as the laptop)"/>
+  <arg name="lamp" default="true"/>
+  <arg name="led" default="true"/>
+  <arg name="emotion" default="true"/>
+  <arg name="camera" default="ros" description="ros | http | none"/>
+  <arg name="camera_dir" default="$(env HOME)" description="folder with camera_publisher.py / camera_server.py"/>
+  <arg name="rotate" default="0" description="camera image rotation: 0, 90, 180, 270"/>
+  <arg name="fps" default="15.0"/>
+  <arg name="imu" default="false"/>
+  <arg name="adc" default="false" description="pinky_sensor_adc: ultrasonic and floor IR (do not run with battery_publisher if they share the ADC)"/>
+
+  <set_env name="ROS_DOMAIN_ID" value="$(var domain)"/>
+
+  <!-- wheels, odometry, TF, LiDAR, battery -->
+  <include file="$(find-pkg-share pinky_bringup)/launch/bringup_robot.launch.xml"/>
+
+  <node if="$(var lamp)" pkg="pinky_lamp_control" exec="main_node" name="pinky_lamp_control" output="screen" respawn="true" respawn_delay="2.0"/>
+  <node if="$(var led)" pkg="pinky_led" exec="led_server" output="screen" respawn="true" respawn_delay="2.0"/>
+  <node if="$(var emotion)" pkg="pinky_emotion" exec="emotion_server" output="screen" respawn="true" respawn_delay="2.0"/>
+  <node if="$(var imu)" pkg="pinky_imu_bno055" exec="main_node" name="pinky_imu" output="screen"/>
+  <node if="$(var adc)" pkg="pinky_sensor_adc" exec="main_node" name="pinky_sensor_adc" output="screen"/>
+
+  <!-- camera: plain scripts, so this repository need not be built on the robot -->
+  <executable if="$(eval '\'$(var camera)\' == \'ros\'')"
+              cmd="python3 $(var camera_dir)/camera_publisher.py --ros-args -p rotate:=$(var rotate) -p fps:=$(var fps)"
+              name="camera_publisher" output="screen" respawn="true" respawn_delay="3.0"/>
+  <executable if="$(eval '\'$(var camera)\' == \'http\'')"
+              cmd="python3 $(var camera_dir)/camera_server.py --rotate $(var rotate)"
+              name="camera_server" output="screen" respawn="true" respawn_delay="3.0"/>
+</launch>

@@ -53,7 +53,7 @@ class Perception(Node):
     def __init__(self):
         super().__init__('perception')
         p = self.declare_parameter
-        p('image_source', 'http')          # http (camera_server.py) | ros (image topic)
+        p('image_source', 'ros')           # ros (camera_publisher.py topic) | http (camera_server.py)
         p('stream_url', 'http://192.168.4.1:5000/video_feed')
         p('max_turn_rate', 0.6)            # rad/s, http: skip frames while turning faster
         p('image_topic', '/camera/image_raw/compressed')

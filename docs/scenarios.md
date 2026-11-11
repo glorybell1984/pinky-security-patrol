@@ -33,4 +33,4 @@ The step-by-step demo is in [demo_guide.md](demo_guide.md).
 | No false MOVING while patrolling past a static box | — | ⬜ |
 | Emergency stop stops the real robot immediately | — | ⬜ |
 
-Unit tests: `cd security_task_manager && python3 -m pytest test` (21 tests) and `cd security_traffic_manager && python3 -m pytest test` (5 tests).
+Unit tests: `cd security_task_manager && python3 -m pytest test` (21 tests) and `cd security_traffic_manager && python3 -m pytest test` (13 tests).
