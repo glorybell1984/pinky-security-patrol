@@ -4,14 +4,18 @@ Subscribes
     /perception/detections   ObjectDetectionArray   (one message per camera frame)
     /traffic/robot_status    RobotState             (pose, motion, lamp, patrol pass)
     /traffic/events          std_msgs/String (JSON) (forwarded to /fleet/events)
-    /battery/voltage, /battery/percent   std_msgs/Float32 (Pinky's battery_publisher)
+    /battery/voltage_avg     std_msgs/Float32 (battery_sampler.py on the robot: median of 5 s)
+    /battery/voltage         std_msgs/Float32 (Pinky's battery_publisher; used only while
+                             no voltage_avg arrives)
 Publishes
     /fleet/objects           TrackedObjectArray     2 Hz
     /fleet/robot_state       RobotState             2 Hz (adds task_state)
     /fleet/events            std_msgs/String (JSON) every event
     /fleet/event_history     std_msgs/String (JSON list) last 500 events, every 3 s,
                              so a dashboard opened later still shows the history
-    /fleet/battery           std_msgs/String (JSON) 1 Hz: level, voltage, percent
+    /fleet/battery           std_msgs/String (JSON) 1 Hz: level, voltage, percent, trend
+    ~/patrol_logs/battery_<time>.csv   every 10 s: voltage, percent, trend, moving (to
+                             calibrate battery_curve)
     /tf_static               suspicious_object_<id> frames under map
 Services
     /fleet/acknowledge_object  AcknowledgeObject
@@ -28,7 +32,9 @@ Battery
     Start patrol, because Pinky charges through a cable that a person plugs in.
 """
 import json
+import os
 import threading
+import time
 from collections import deque
 from datetime import datetime
 
@@ -93,12 +99,13 @@ class TaskManager(Node):
         p('auto_start_patrol', True)
         p('log_dir', '~/patrol_logs')
         p('battery_enabled', True)
-        p('battery_voltage_topic', '/battery/voltage')
-        p('battery_percent_topic', '/battery/percent')
+        p('battery_voltage_topic', '/battery/voltage_avg')   # steady (battery_sampler.py)
+        p('battery_raw_topic', '/battery/voltage')           # Pinky's, fallback
+        p('battery_curve', [6.8, 0.0, 7.6, 100.0])           # voltage, percent pairs
         p('battery_low_voltage', 7.0)        # go and charge after the current task
         p('battery_critical_voltage', 6.8)   # go and charge now (Pinky warns here)
         p('battery_charged_voltage', 8.0)    # ready to patrol again
-        p('battery_window', 3)               # median of the last N samples (5 s each)
+        p('battery_window', 3)               # median of the last N samples
         p('battery_confirm', 2)              # readings in a row before a level change
         p('auto_resume_after_charge', True)  # dock with contacts: back to patrol when charged
         g = lambda name: self.get_parameter(name).value  # noqa: E731
@@ -126,7 +133,13 @@ class TaskManager(Node):
             charged_voltage=g('battery_charged_voltage'),
             window=g('battery_window'),
             confirm=g('battery_confirm'),
+            curve=[(c[i], c[i + 1]) for c in [list(g('battery_curve'))]
+                   for i in range(0, len(c) - 1, 2)],
         ))
+        self.battery_source = None           # 'avg' or 'raw'
+        self.battery_avg_time = 0.0
+        self.battery_log = None
+        self.battery_log_tick = 0
         self.auto_resume = g('auto_resume_after_charge')
 
         self.logger = EventLogger(g('log_dir'))
@@ -155,9 +168,10 @@ class TaskManager(Node):
                                  self.on_traffic_event, 50, callback_group=self.cb)
         if g('battery_enabled'):
             self.create_subscription(Float32, g('battery_voltage_topic'),
-                                     self.on_battery_voltage, 10, callback_group=self.cb)
-            self.create_subscription(Float32, g('battery_percent_topic'),
-                                     self.on_battery_percent, 10, callback_group=self.cb)
+                                     self.on_battery_avg, 10, callback_group=self.cb)
+            self.create_subscription(Float32, g('battery_raw_topic'),
+                                     self.on_battery_raw, 10, callback_group=self.cb)
+            self.open_battery_log(g('log_dir'))
         self.battery_pub = self.create_publisher(String, '/fleet/battery', 10)
         self.objects_pub = self.create_publisher(TrackedObjectArray, '/fleet/objects', 10)
         self.state_pub = self.create_publisher(RobotState, '/fleet/robot_state', 10)
@@ -273,14 +287,48 @@ class TaskManager(Node):
             self.start_follow(ev['marker_id'])
 
     # ================================================================ battery
-    def on_battery_percent(self, msg):
-        self.battery.percent = float(msg.data)
+    def on_battery_avg(self, msg):
+        self.battery_avg_time = time.monotonic()
+        if self.battery_source != 'avg':
+            self.get_logger().info('Battery: steady voltage from battery_sampler.py')
+            self.battery_source = 'avg'
+        self.on_battery_voltage(float(msg.data))
 
-    def on_battery_voltage(self, msg):
+    def on_battery_raw(self, msg):
+        if time.monotonic() - self.battery_avg_time < 10.0:
+            return                            # the steady voltage is arriving
+        if self.battery_source != 'raw':
+            self.get_logger().warn('Battery: no /battery/voltage_avg (battery_sampler.py not '
+                                   "running?), using Pinky's single readings (noisy)")
+            self.battery_source = 'raw'
+        self.on_battery_voltage(float(msg.data))
+
+    def on_battery_voltage(self, volts):
         with self.lock:
-            events = self.battery.update(float(msg.data))
+            events = self.battery.update(volts, time.monotonic())
         for name in events:
             self.on_battery_event(name)
+
+    def open_battery_log(self, log_dir):
+        try:
+            folder = os.path.expanduser(log_dir)
+            os.makedirs(folder, exist_ok=True)
+            path = os.path.join(folder, datetime.now().strftime('battery_%Y%m%d_%H%M%S.csv'))
+            self.battery_log = open(path, 'w', buffering=1)
+            self.battery_log.write('time,voltage,raw_voltage,percent,trend,slope_v_per_min,'
+                                   'source,motion,task\n')
+        except OSError as e:
+            self.get_logger().warn(f'battery log not written: {e}')
+
+    def log_battery(self, data):
+        self.battery_log_tick += 1
+        if self.battery_log is None or data['voltage'] is None or self.battery_log_tick % 10:
+            return
+        rs = self.robot_status
+        self.battery_log.write(','.join(str(x) for x in (
+            datetime.now().isoformat(timespec='seconds'), data['voltage'], data['raw_voltage'],
+            data['percent'], data['trend'], data['slope_v_per_min'], self.battery_source,
+            rs.motion_state, self.mode)) + '\n')
 
     def on_battery_event(self, name):
         v = self.battery.voltage
@@ -628,7 +676,9 @@ class TaskManager(Node):
         data = self.battery.snapshot()
         data['mode'] = self.mode
         data['auto_resume'] = self.auto_resume
+        data['source'] = self.battery_source
         self.battery_pub.publish(String(data=json.dumps(data)))
+        self.log_battery(data)
 
     def publish_history(self):
         self.history_pub.publish(String(data=json.dumps(list(self.recent_events))))

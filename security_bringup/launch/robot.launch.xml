@@ -5,7 +5,7 @@
   scripts, so this repository does not have to be built on the robot. Copy three
   files (camera_publisher.py imports its camera code from camera_server.py):
 
-    scp robot.launch.xml camera_publisher.py camera_server.py cmd_vel_watchdog.py pinky@<robot-ip>:~/
+    scp robot.launch.xml camera_publisher.py camera_server.py cmd_vel_watchdog.py battery_sampler.py pinky@<robot-ip>:~/
     ssh pinky@<robot-ip>
     ros2 launch ~/robot.launch.xml                      # everything, domain 17
     ros2 launch ~/robot.launch.xml emotion:=false       # without the LCD faces
@@ -20,6 +20,8 @@
     camera             ros:  camera_publisher.py -> /camera/image_raw/compressed
                        http: camera_server.py   -> http://<robot-ip>:5000/video_feed
                        none: no camera
+    battery            battery_sampler.py: median of 5 s of readings -> /battery/voltage_avg
+                       (one Pinky reading jumps 7.2-7.7 V with current bursts)
     imu, adc           optional: BNO055 /imu_raw, ultrasonic + IR (pinky_sensor_adc)
     watchdog           optional: stops the wheels 0.5 s after the last cmd_vel. Pinky's drive
                        node has no timeout and keeps the last speed (sim2real timeout test)
@@ -37,6 +39,7 @@
   <arg name="camera_dir" default="$(env HOME)" description="folder with camera_publisher.py / camera_server.py"/>
   <arg name="rotate" default="0" description="camera image rotation: 0, 90, 180, 270"/>
   <arg name="fps" default="15.0"/>
+  <arg name="battery" default="true" description="steady battery voltage (needs battery_sampler.py in camera_dir)"/>
   <arg name="imu" default="false"/>
   <arg name="adc" default="false" description="pinky_sensor_adc: ultrasonic and floor IR (do not run with battery_publisher if they share the ADC)"/>
   <arg name="watchdog" default="false" description="cmd_vel timeout on the robot (needs cmd_vel_watchdog.py in camera_dir)"/>
@@ -62,6 +65,9 @@
   <node if="$(var emotion)" pkg="pinky_emotion" exec="emotion_server" output="screen" respawn="true" respawn_delay="2.0"/>
   <node if="$(var imu)" pkg="pinky_imu_bno055" exec="main_node" name="pinky_imu" output="screen"/>
   <node if="$(var adc)" pkg="pinky_sensor_adc" exec="main_node" name="pinky_sensor_adc" output="screen"/>
+
+  <executable if="$(var battery)" cmd="python3 $(var camera_dir)/battery_sampler.py"
+              name="battery_sampler" output="screen" respawn="true" respawn_delay="3.0"/>
 
   <!-- camera: plain scripts, so this repository need not be built on the robot -->
   <executable if="$(eval '\'$(var camera)\' == \'ros\'')"

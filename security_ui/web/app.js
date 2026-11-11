@@ -704,7 +704,7 @@
     card.classList.remove('low', 'critical', 'charging');
     if (!b || b.voltage == null) {
       $('s-battery').textContent = '—';
-      $('s-battery-sub').textContent = b ? 'Waiting for /battery/voltage' : 'No /fleet/battery yet';
+      $('s-battery-sub').textContent = b ? 'Waiting for the battery voltage' : 'No /fleet/battery yet';
       $('battery-fill').style.width = '0';
       return;
     }
@@ -712,7 +712,10 @@
       : Math.max(0, Math.min(100, (b.voltage - 6.6) / (8.4 - 6.6) * 100));
     $('s-battery').textContent = `${b.voltage.toFixed(2)} V · ${Math.round(pct)}%`;
     $('battery-fill').style.width = `${pct}%`;
+    const TREND = { charging: 'charging ↑', discharging: 'draining ↓', steady: 'steady' };
     let sub = 'OK';
+    if (b.trend && TREND[b.trend]) sub = `OK · ${TREND[b.trend]}`;
+    if (b.trend === 'charging') card.classList.add('charging');
     if (b.mode === 'CHARGING') {
       card.classList.add('charging');
       sub = b.auto_resume
@@ -728,7 +731,10 @@
       card.classList.add('low');
       sub = b.mode === 'FOLLOWING' ? 'Low · charger after this follow' : `Low (≤ ${b.low_voltage} V)`;
     }
+    if (b.source === 'raw') sub += ' · raw readings';
     $('s-battery-sub').textContent = sub;
+    $('s-battery-sub').title = b.slope_v_per_min != null
+      ? `${b.slope_v_per_min > 0 ? '+' : ''}${b.slope_v_per_min} V/min over the last 2 min` : '';
   }
 
   function renderSim() {

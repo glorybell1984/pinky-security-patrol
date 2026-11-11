@@ -21,12 +21,17 @@ task_manager:
     auto_start_patrol: false      # real robot: press Start patrol (Fake Pinky: true, launch)
     log_dir: ~/patrol_logs
 
-    # Battery (Pinky Pro 2-cell Li-ion, /battery/voltage every 5 s, about 8.4 V full)
+    # Battery. Voltage from battery_sampler.py on the robot (median of 5 s, 1 Hz);
+    # Pinky's single readings jump 7.2-7.7 V with current bursts (2026-11-12).
+    # TODO: battery type and full voltage -> battery_curve and the thresholds below.
     battery_enabled: true
+    battery_voltage_topic: /battery/voltage_avg
+    battery_raw_topic: /battery/voltage    # used only while no voltage_avg arrives
+    battery_curve: [6.8, 0.0, 7.6, 100.0]  # voltage, percent pairs; now Pinky's own straight line
     battery_low_voltage: 7.0        # finish the current follow, then go to the charger
     battery_critical_voltage: 6.8   # stop everything and go to the charger now
     battery_charged_voltage: 8.0    # "charged" message on the dashboard
-    battery_window: 3               # median of the last 3 readings (motor load sag)
-    battery_confirm: 2              # readings in a row before the level changes
+    battery_window: 5               # median of the last 5 readings (1 per s)
+    battery_confirm: 5              # readings in a row before the level changes (5 s)
     auto_resume_after_charge: true  # dock with contacts: leave the dock and patrol when charged
                                     # (false = cable charging: operator unplugs and restarts)

@@ -57,3 +57,41 @@ def test_zero_reading_ignored():
     mon = BatteryMonitor(BatteryConfig())
     assert mon.update(0.0) == []
     assert mon.level == 'UNKNOWN'
+
+
+# ---------------------------------------------------------------- percent curve, trend
+from security_task_manager.battery_monitor import BatteryConfig as _Cfg  # noqa: E402
+from security_task_manager.battery_monitor import BatteryMonitor as _Mon  # noqa: E402
+
+
+def test_percent_follows_the_curve():
+    m = _Mon(_Cfg(window=1, curve=[(6.8, 0.0), (7.4, 30.0), (8.4, 100.0)]))
+    m.update(7.1)
+    assert abs(m.percent - 15.0) < 1e-9          # halfway on the first segment
+    m.update(7.9)
+    assert abs(m.percent - 65.0) < 1e-9
+    m.update(9.0)
+    assert m.percent == 100.0                     # clamped
+    m.update(6.0)
+    assert m.percent == 0.0
+
+
+def test_default_curve_matches_pinkys_formula():
+    m = _Mon(_Cfg(window=1))
+    m.update(7.214)
+    assert abs(m.percent - (7.214 - 6.8) / 0.8 * 100) < 1e-6   # Pinky showed 51.7 %
+
+
+def test_trend_tells_charging_from_draining():
+    m = _Mon(_Cfg(window=1, trend_seconds=120.0, trend_threshold=0.01))
+    for k in range(121):                          # +0.03 V/min while charging
+        m.update(7.20 + 0.0005 * k, t=float(k))
+    assert m.trend == 'charging' and abs(m.slope - 0.03) < 1e-6
+    m = _Mon(_Cfg(window=1))
+    for k in range(121):                          # -0.02 V/min while patrolling
+        m.update(7.40 - 0.02 / 60 * k, t=float(k))
+    assert m.trend == 'discharging'
+    m = _Mon(_Cfg(window=1))
+    for k in range(30):
+        m.update(7.3, t=float(k))
+    assert m.trend == 'unknown'                   # less than half the window yet

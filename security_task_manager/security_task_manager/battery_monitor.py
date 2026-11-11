@@ -1,7 +1,12 @@
-"""Battery level from Pinky's /battery/voltage (published every 5 s).
+"""Battery level, percent and trend.
 
-Pinky Pro uses a 2-cell Li-ion pack: about 8.4 V full. Pinky's own bringup
-warns at 6.8 V, and the class guide says to charge below 7.0 V.
+Input: /battery/voltage_avg from battery_sampler.py on the robot (median of 5 s
+of readings, 1 Hz), or Pinky's /battery/voltage (one reading every 5 s; single
+readings of a resting robot jump 7.2-7.7 V with current bursts).
+
+Percent comes from a voltage -> percent curve (config), not from Pinky's
+/battery/percent (a straight line 6.8 V = 0 %, 7.6 V = 100 %). The trend (slope
+of the filtered voltage over the last minutes) tells charging from discharging.
 
 The voltage drops under motor load, so one low sample must not send the robot
 home. Each reading is the median of the last `window` samples, and a level
@@ -15,7 +20,7 @@ Events returned by update():
     charged    filtered voltage >= charged_voltage    (ready to patrol again)
 """
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from statistics import median
 
 UNKNOWN, OK, LOW, CRITICAL = 'UNKNOWN', 'OK', 'LOW', 'CRITICAL'
@@ -29,6 +34,11 @@ class BatteryConfig:
     hysteresis: float = 0.15
     window: int = 3
     confirm: int = 2
+    # voltage -> percent, pairs sorted by voltage (straight lines in between).
+    # Default = Pinky's own formula until the battery is calibrated.
+    curve: list = field(default_factory=lambda: [(6.8, 0.0), (7.6, 100.0)])
+    trend_seconds: float = 120.0     # slope over this much history
+    trend_threshold: float = 0.01    # V/min; above = charging, below minus = discharging
 
 
 class BatteryMonitor:
@@ -40,6 +50,9 @@ class BatteryMonitor:
         self.voltage = None          # filtered
         self.raw_voltage = None
         self.percent = None
+        self.history = deque()       # (t, filtered volts) for the trend
+        self.slope = None            # V/min
+        self.trend = 'unknown'      # charging | discharging | steady | unknown
         self.charged = False
         self._candidate = None
         self._count = 0
@@ -55,14 +68,43 @@ class BatteryMonitor:
             return self.level if v > c.critical_voltage else CRITICAL
         return OK
 
-    def update(self, voltage):
-        """Add one voltage sample. Returns a list of event names."""
+    def percent_of(self, v):
+        """Percent from the curve (clamped to 0..100)."""
+        pts = sorted(self.cfg.curve)
+        if v <= pts[0][0]:
+            return float(pts[0][1])
+        for (v0, p0), (v1, p1) in zip(pts, pts[1:]):
+            if v <= v1:
+                return float(p0 + (p1 - p0) * (v - v0) / (v1 - v0))
+        return float(pts[-1][1])
+
+    def _update_trend(self, t):
+        self.history.append((t, self.voltage))
+        while self.history and t - self.history[0][0] > self.cfg.trend_seconds:
+            self.history.popleft()
+        if len(self.history) < 5 or self.history[-1][0] - self.history[0][0] < 0.5 * self.cfg.trend_seconds:
+            self.slope, self.trend = None, 'unknown'
+            return
+        ts = [a for a, _ in self.history]
+        vs = [b for _, b in self.history]
+        mt, mv = sum(ts) / len(ts), sum(vs) / len(vs)
+        den = sum((a - mt) ** 2 for a in ts)
+        self.slope = 60.0 * sum((a - mt) * (b - mv) for a, b in self.history) / den if den else 0.0
+        thr = self.cfg.trend_threshold
+        self.trend = ('charging' if self.slope > thr else 'discharging' if self.slope < -thr
+                      else 'steady')
+
+    def update(self, voltage, t=None):
+        """Add one voltage sample (t: seconds, for the trend). Returns event names."""
         events = []
         if voltage is None or voltage <= 0.5:     # sensor not ready / no battery reading
             return events
         self.raw_voltage = voltage
         self.samples.append(voltage)
         self.voltage = median(self.samples)
+        self.percent = self.percent_of(self.voltage)
+        if t is not None:
+            self._update_trend(t)
 
         target = self.classify(self.voltage)
         if self.level == UNKNOWN:
@@ -106,6 +148,8 @@ class BatteryMonitor:
             'voltage': round(self.voltage, 2) if self.voltage is not None else None,
             'raw_voltage': round(self.raw_voltage, 2) if self.raw_voltage is not None else None,
             'percent': round(self.percent, 1) if self.percent is not None else None,
+            'trend': self.trend,
+            'slope_v_per_min': round(self.slope, 3) if self.slope is not None else None,
             'charged': self.charged,
             'low_voltage': self.cfg.low_voltage,
             'critical_voltage': self.cfg.critical_voltage,
