@@ -14,6 +14,8 @@
   <exec_depend>nav2_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>security_interfaces</exec_depend>
   <exec_depend>security_task_manager</exec_depend>
   <exec_depend>security_perception</exec_depend>

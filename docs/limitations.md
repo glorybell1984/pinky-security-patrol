@@ -58,6 +58,22 @@ change the status. If the result shows a new limit, add a row.
 | C16 | Object marker size | LiDAR vs marker-size distance for #24 | LiDAR 0.75 m, size estimate 0.46-0.52 m: the print is ~4 cm, config said 2.7 | Wrong size makes a static marker "move" | Measure and set `marker_size` | ⏳ measure |
 | C12 | Person detection (YOLO) | `pinkylib` YOLO FPS on the Pi | | Pi CPU | Run on the laptop | ⏳ |
 
+### IMU and odometry (simulator vs real: [sim2real.md](sim2real.md))
+
+| # | Capability | Test | Result | Limit | Workaround | Status |
+|---|---|---|---|---|---|---|
+| I1 | IMU in the simulator | Pinky's simulators | MuJoCo has no IMU; Gazebo IMU is ideal (code) | IMU behaviour never tested in simulation | Measure on the robot (sim2real) | ✅ |
+| I2 | Gyro units | `sim2real turn` (gyro integral / heading change) | Driver publishes **deg/s** (code: register / 16) | 57.3x off for ROS (rad/s) | `imu_adapter` -> `/imu` in rad/s | ✅ code / ⏳ measured |
+| I3 | Gyro bias and noise | `sim2real static` | | Bias makes the heading drift | `imu_adapter` removes the start bias | ⏳ |
+| I4 | **Heading drift** | `sim2real static --duration 300`, right after power-up | | Relative heading (IMU mode, no magnetometer, 0 at power-up) | Re-zero before each turn; wait for settling | ⏳ |
+| I5 | Gyro settling after start | same, compare first vs last minute | | Calibration status never read by the driver | Wait still ~1 min after start | ⏳ |
+| I6 | Mounting / axes | `sim2real static`: `imu.up_axis`, `turn`: IMU sign vs wheels | | No axis remap in the driver | `imu_adapter yaw_sign`, AXIS_MAP | ⏳ |
+| I7 | **IMU turn accuracy** | `sim2real turn`, true angle by LiDAR scan matching | | docking.md assumed 1-2 % | Use the measured value | ⏳ |
+| I8 | Odometry turn accuracy | `sim2real turn` | | Nominal wheel separation 0.0961 m | Set the real separation | ⏳ |
+| I9 | Odometry distance accuracy | `sim2real straight` | | Nominal wheel radius 0.027 m | Set the real radius | ⏳ |
+| I10 | IMU covariances | `sim2real static` | Fixed 0.01 placeholder (code) | Wrong EKF weights | `imu_adapter` noise params | ✅ |
+| I11 | Response delay, top speed | `sim2real step` | Limit 100 rpm = 0.283 m/s (code) | Faster than the sim limits (0.25 m/s, 1.5 rad/s) | | ✅ code / ⏳ measured |
+
 ### LiDAR and navigation
 
 | # | Capability | Test | Result | Limit | Workaround | Status |
@@ -87,7 +103,7 @@ change the status. If the result shows a new limit, add a row.
 | B7 | Charge time 7.0 -> 8.0 V | Stopwatch | | Robot off patrol | | ⏳ |
 | B8 | Docking success, real robot | Go home tries | 2026-11-11: failed (not lined up, wall bumps) before the fixes in C14, C15, N6, N11 | Close-range blur, marker angle noise, AMCL near the dock | Two-phase docking, median while still, marker relocalization | ⏳ retest |
 | B9 | Docking time | Staging -> contact | Fake: 9-14 s | | | 🧪 |
-| B10 | Smallest working speed | Docking final creep at 0.02 m/s | | Motor dead band | `dock_min_speed` | ⏳ |
+| B10 | Smallest working speed | `sim2real minspeed --drive` | | Motor dead band | `dock_min_speed` | ⏳ |
 
 ### Signals and output
 
@@ -103,7 +119,7 @@ change the status. If the result shows a new limit, add a row.
 
 | # | Capability | Test | Result | Limit | Workaround | Status |
 |---|---|---|---|---|---|---|
-| Y1 | **`/cmd_vel` stops arriving** | Robot on a stand, publish 0.1 m/s then kill the publisher | | Robot may keep driving | Pinky timeout? | ⏳ |
+| Y1 | **`/cmd_vel` stops arriving** | `sim2real timeout --drive` (max 30 cm) | Code: `pinky_bringup` has **no timeout**, the last speed is kept; MuJoCo stops after 0.5 s | Wi-Fi drop / crashed node = runaway | `robot.launch.xml watchdog:=true` (`cmd_vel_watchdog.py`, model test: stops after 0.73 s) | ✅ code / ⏳ measured |
 | Y2 | **Wi-Fi drop while patrolling** | Turn laptop Wi-Fi off for 5 s | | Nav2 runs on the laptop | Stop safely, alert | ⏳ |
 | Y3 | Pi CPU load | `htop` on the robot with bringup + camera | | Pi 5 limits | Heavy work on the laptop | ⏳ |
 | Y4 | Peripherals sharing the ADC | Run `battery_publisher` + `pinky_sensor_adc` together | | Both may read the same chip | Run only one | ⏳ |

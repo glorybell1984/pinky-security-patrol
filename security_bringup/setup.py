@@ -26,6 +26,10 @@ setup(
     entry_points={
         'console_scripts': [
             'fake_pinky = security_bringup.fake_pinky:main',
+            'sim2real = security_bringup.sim2real:main',
+            'pinky_model = security_bringup.pinky_model:main',
+            'imu_adapter = security_bringup.imu_adapter:main',
+            'cmd_vel_watchdog = security_bringup.cmd_vel_watchdog:main',
         ],
     },
 )

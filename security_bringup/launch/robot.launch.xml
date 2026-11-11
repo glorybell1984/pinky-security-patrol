@@ -5,7 +5,7 @@
   scripts, so this repository does not have to be built on the robot. Copy three
   files (camera_publisher.py imports its camera code from camera_server.py):
 
-    scp robot.launch.xml camera_publisher.py camera_server.py pinky@<robot-ip>:~/
+    scp robot.launch.xml camera_publisher.py camera_server.py cmd_vel_watchdog.py pinky@<robot-ip>:~/
     ssh pinky@<robot-ip>
     ros2 launch ~/robot.launch.xml                      # everything, domain 17
     ros2 launch ~/robot.launch.xml emotion:=false       # without the LCD faces
@@ -21,6 +21,8 @@
                        http: camera_server.py   -> http://<robot-ip>:5000/video_feed
                        none: no camera
     imu, adc           optional: BNO055 /imu_raw, ultrasonic + IR (pinky_sensor_adc)
+    watchdog           optional: stops the wheels 0.5 s after the last cmd_vel. Pinky's drive
+                       node has no timeout and keeps the last speed (sim2real timeout test)
 
   ROS_DOMAIN_ID is set for every process started here (default 17, the laptop's
   domain), so a forgotten "export ROS_DOMAIN_ID" in the robot shell does not matter.
@@ -37,11 +39,23 @@
   <arg name="fps" default="15.0"/>
   <arg name="imu" default="false"/>
   <arg name="adc" default="false" description="pinky_sensor_adc: ultrasonic and floor IR (do not run with battery_publisher if they share the ADC)"/>
+  <arg name="watchdog" default="false" description="cmd_vel timeout on the robot (needs cmd_vel_watchdog.py in camera_dir)"/>
+  <arg name="watchdog_timeout" default="0.5"/>
 
   <set_env name="ROS_DOMAIN_ID" value="$(var domain)"/>
 
   <!-- wheels, odometry, TF, LiDAR, battery -->
-  <include file="$(find-pkg-share pinky_bringup)/launch/bringup_robot.launch.xml"/>
+  <group unless="$(var watchdog)">
+    <include file="$(find-pkg-share pinky_bringup)/launch/bringup_robot.launch.xml"/>
+  </group>
+  <group if="$(var watchdog)">
+    <set_remap from="cmd_vel" to="cmd_vel_safe"/>
+    <set_remap from="/cmd_vel" to="/cmd_vel_safe"/>
+    <include file="$(find-pkg-share pinky_bringup)/launch/bringup_robot.launch.xml"/>
+  </group>
+  <executable if="$(var watchdog)"
+              cmd="python3 $(var camera_dir)/cmd_vel_watchdog.py --ros-args -p timeout:=$(var watchdog_timeout)"
+              name="cmd_vel_watchdog" output="screen" respawn="true" respawn_delay="1.0"/>
 
   <node if="$(var lamp)" pkg="pinky_lamp_control" exec="main_node" name="pinky_lamp_control" output="screen" respawn="true" respawn_delay="2.0"/>
   <node if="$(var led)" pkg="pinky_led" exec="led_server" output="screen" respawn="true" respawn_delay="2.0"/>

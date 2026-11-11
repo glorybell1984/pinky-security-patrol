@@ -89,13 +89,14 @@ Once, copy the robot files (robot IP: ours is 192.168.14.80):
 cd ~/patrol_ws/src/pinky-security-patrol
 scp security_bringup/launch/robot.launch.xml \
     security_perception/security_perception/camera_publisher.py \
-    security_perception/security_perception/camera_server.py  pinky@192.168.14.80:~/
+    security_perception/security_perception/camera_server.py \
+    security_bringup/security_bringup/cmd_vel_watchdog.py  pinky@192.168.14.80:~/
 ```
 
 ```bash
 # ---- Robot (ssh pinky@192.168.14.80): bringup, lamp, LED ring, LCD, camera
 ros2 launch ~/robot.launch.xml
-#   options: emotion:=false  camera:=http|none  rotate:=180  imu:=true  domain:=17
+#   options: emotion:=false  camera:=http|none  rotate:=180  imu:=true  watchdog:=true  domain:=17
 
 # ---- Laptop: Nav2 (police_map2 + nav2_arena.yaml), RViz, patrol system, dashboard
 source /opt/ros/jazzy/setup.bash && source ~/pinky/install/local_setup.bash && source ~/patrol_ws/install/local_setup.bash
@@ -234,6 +235,7 @@ python3 -m pytest security_traffic_manager/test    # docking math + closed-loop 
 | Document | Contents |
 |---|---|
 | [docs/demo_guide.md](docs/demo_guide.md) | Fake demo scenario, real robot start order, camera setup, remaining checklist |
+| [docs/sim2real.md](docs/sim2real.md) | Simulator vs real robot: 14 differences found in Pinky's code (IMU in deg/s, no cmd_vel timeout, ...) and the `sim2real` tests to measure them |
 | [docs/limitations.md](docs/limitations.md) | **Project goal:** every Pinky Pro capability, what we measured, its limits and workarounds |
 | [docs/narrator.md](docs/narrator.md) | Reports by map section: sections, LLM providers and Claude setup, templates |
 | [docs/docking.md](docs/docking.md) | Home dock: how docking works, building the dock, calibration, tuning |
