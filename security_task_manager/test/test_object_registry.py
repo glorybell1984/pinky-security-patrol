@@ -137,3 +137,22 @@ def test_clear_removes_object():
     reg.update(7, 1.0, 1.0, 0.0, 1)
     assert names(reg.clear(7)) == ['cleared']
     assert reg.get(7) is None
+
+
+def test_acknowledged_object_is_never_followed_again():
+    """Real robot: a static wall marker read as moving was followed, acknowledged,
+    and followed again at once ('reacquired'). Acknowledged means: no reaction."""
+    reg = ObjectRegistry()
+    reg.update(24, 1.0, 1.0, 0.0, 1)
+    ev = []
+    for k in range(4):                                   # read 0.5 m off: "moving"
+        ev += reg.update(24, 1.5, 1.0, 0.2 * (k + 1), 1)
+    moving = [e for e in ev if e['event'] == 'moving']
+    assert moving and action_for(moving[0], reg.get(24)) == FOLLOW
+    reg.acknowledge(24)
+    reg.set_lost(24)                                     # follow stopped
+    ev = reg.update(24, 1.5, 1.0, 1.5, 1)                # next sighting
+    assert names(ev) == ['reacquired']
+    assert action_for(ev[0], reg.get(24)) is None
+    ev = reg.update(24, 2.5, 1.0, 30.0, 2)               # even far away later
+    assert all(action_for(e, reg.get(24)) is None for e in ev)
