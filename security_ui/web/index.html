@@ -68,6 +68,10 @@
               <span><i class="sw sw-removed"></i>Removed</span>
               <span><i class="sw sw-wp"></i>Waypoint</span>
             </div>
+            <div class="seg" role="group" aria-label="Map view">
+              <button type="button" class="btn btn-sm" id="map-rotate" aria-pressed="true" title="Turn the arena horizontal (section A left)">Arena view</button>
+              <button type="button" class="btn btn-sm" id="map-raw" aria-pressed="false" title="Whole SLAM map, as recorded">Raw map</button>
+            </div>
           </div>
           <div class="map-wrap"><canvas id="map" role="img" aria-label="Map with robot, patrol waypoints and tracked objects"></canvas></div>
           <p class="hint" id="map-hint">Click an object on the map to open it in the registry.</p>

@@ -97,7 +97,7 @@ button { font-family: inherit; }
 .sw-l1 { background: var(--l1); } .sw-l2 { background: var(--l2); } .sw-l3 { background: var(--l3); }
 .sw-removed { border: 2px solid #9CA3AF; }
 .sw-wp { background: #fff; border: 2px solid var(--accent); }
-.map-wrap { position: relative; width: 100%; aspect-ratio: 16 / 10; max-height: 440px; border-radius: 10px; background: #F7F8FA; overflow: hidden; }
+.map-wrap { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 300px; max-height: 620px; border-radius: 10px; background: #F7F8FA; overflow: hidden; }
 #map { display: block; width: 100%; height: 100%; cursor: crosshair; }
 
 /* ---------- robot / camera / sim */

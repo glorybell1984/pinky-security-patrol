@@ -251,48 +251,162 @@
   function buildMapImage(m) {
     const { width, height } = m.info;
     if (!width || !height) return;
+    state.map = { info: m.info, data: m.data, raw: null, clean: null, cleanKey: '' };
+    state.map.raw = renderGrid(m.info, (k) => {
+      const v = m.data[k];
+      return v < 0 ? [214, 214, 214, 255] : v > 50 ? [43, 43, 43, 255] : [247, 247, 247, 255];
+    });
+  }
+
+  function renderGrid(info, colorOf) {
+    const { width, height } = info;
     const c = document.createElement('canvas');
     c.width = width; c.height = height;
     const ctx = c.getContext('2d');
     const img = ctx.createImageData(width, height);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
-        const v = m.data[y * width + x];
-        // image rows go top-down, map rows bottom-up
-        const i = ((height - 1 - y) * width + x) * 4;
-        const shade = v < 0 ? 214 : v > 50 ? 43 : 247;
-        img.data[i] = img.data[i + 1] = img.data[i + 2] = shade;
-        img.data[i + 3] = 255;
+        const rgba = colorOf(y * width + x);
+        const i = ((height - 1 - y) * width + x) * 4;      // image rows go top-down, map rows bottom-up
+        img.data[i] = rgba[0]; img.data[i + 1] = rgba[1]; img.data[i + 2] = rgba[2]; img.data[i + 3] = rgba[3];
       }
     }
     ctx.putImageData(img, 0, 0);
-    state.map = { canvas: c, info: m.info };
+    return c;
+  }
+
+  // Same image with each cell as k x k sharp pixels: stays crisp when the view turns it.
+  function upscale(src, k) {
+    const c = document.createElement('canvas');
+    c.width = src.width * k; c.height = src.height * k;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(src, 0, 0, c.width, c.height);
+    return c;
+  }
+
+  // Clean map: only the floor the robot can reach from the waypoints / dock / robot
+  // (flood fill over free cells away from walls, so it does not leak through the
+  // LiDAR rays that pass gaps in the walls), plus the walls around it.
+  function cleanMapImage() {
+    const M = state.map;
+    const seeds = [...state.waypoints];
+    if (state.charger) seeds.push(state.charger);
+    if (state.robot) seeds.push(state.robot.pose);
+    const key = seeds.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(';');
+    if (M.clean && M.cleanKey === key) return M.clean;
+    const { width: W, height: H, resolution: res } = M.info;
+    const ox = M.info.origin.position.x, oy = M.info.origin.position.y;
+    const free = (k) => M.data[k] >= 0 && M.data[k] <= 50;
+    const roomy = new Uint8Array(W * H);                    // free and no wall within 1 cell
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        let ok = free(y * W + x);
+        for (let dy = -1; ok && dy <= 1; dy++) for (let dx = -1; ok && dx <= 1; dx++) ok = free((y + dy) * W + x + dx);
+        roomy[y * W + x] = ok ? 1 : 0;
+      }
+    }
+    const reach = new Uint8Array(W * H);
+    const queue = [];
+    for (const p of seeds) {
+      const cx = Math.floor((p.x - ox) / res), cy = Math.floor((p.y - oy) / res);
+      for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {     // seeds may sit close to a wall
+        const x = cx + dx, y = cy + dy, k = y * W + x;
+        if (x >= 0 && y >= 0 && x < W && y < H && roomy[k] && !reach[k]) { reach[k] = 1; queue.push(k); }
+      }
+    }
+    while (queue.length) {
+      const k = queue.pop(), x = k % W, y = (k - x) / W;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy, nk = ny * W + nx;
+        if (nx >= 0 && ny >= 0 && nx < W && ny < H && roomy[nk] && !reach[nk]) { reach[nk] = 1; queue.push(nk); }
+      }
+    }
+    const near = new Uint8Array(W * H);                     // reachable area grown back by 2 cells
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (!reach[y * W + x]) continue;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < W && ny < H) near[ny * W + nx] = 1;
+      }
+    }
+    let count = 0;
+    M.clean = renderGrid(M.info, (k) => {
+      if (!near[k]) return [0, 0, 0, 0];                     // transparent: not part of the arena
+      if (M.data[k] > 50) return [55, 65, 81, 255];          // wall
+      if (free(k)) { count++; return [255, 255, 255, 255]; } // floor
+      return [226, 230, 236, 255];                           // unknown inside the arena
+    });
+    M.clean = upscale(M.clean, 4);
+    M.cleanScale = 4;
+    M.cleanKey = key;
+    M.cleanCells = count;
+    // area of interest: the reachable floor
+    const pts = [];
+    for (let k = 0; k < W * H; k++) {
+      if (!reach[k]) continue;
+      const x = ox + ((k % W) + 0.5) * res, y = oy + (Math.floor(k / W) + 0.5) * res;
+      pts.push([x, y]);
+    }
+    M.floor = pts;
+    return M.clean;
   }
 
   let view = null;   // world -> screen transform
+  const mapUi = { raw: false, rotate: true };
+
+  // Long axis of the arena: from the first to the last map section, or the
+  // waypoints' main direction; the view turns it horizontal.
+  function arenaAngle() {
+    if (!mapUi.rotate) return 0;
+    const cen = (poly) => [poly.reduce((s, p) => s + p[0], 0) / poly.length, poly.reduce((s, p) => s + p[1], 0) / poly.length];
+    const zs = state.zones.filter((z) => z.polygon && z.polygon.length >= 3);
+    if (zs.length >= 2) {
+      const [x0, y0] = cen(zs[0].polygon), [x1, y1] = cen(zs[zs.length - 1].polygon);
+      return Math.atan2(y1 - y0, x1 - x0);
+    }
+    const pts = state.waypoints;
+    if (pts.length >= 2) {
+      const mx = pts.reduce((s, p) => s + p.x, 0) / pts.length, my = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+      let sxx = 0, syy = 0, sxy = 0;
+      for (const p of pts) { sxx += (p.x - mx) ** 2; syy += (p.y - my) ** 2; sxy += (p.x - mx) * (p.y - my); }
+      return 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    }
+    return 0;
+  }
 
   function computeView(w, h) {
-    let minX, minY, maxX, maxY;
-    if (state.map) {
-      const i = state.map.info;
-      minX = i.origin.position.x; minY = i.origin.position.y;
-      maxX = minX + i.width * i.resolution; maxY = minY + i.height * i.resolution;
-    } else {
-      const pts = [...state.waypoints, ...[...state.objects.values()].map((o) => o.position)];
-      if (state.robot) pts.push(state.robot.pose);
-      if (!pts.length) pts.push({ x: 0, y: 0 });
-      minX = Math.min(...pts.map((p) => p.x)) - 1; maxX = Math.max(...pts.map((p) => p.x)) + 1;
-      minY = Math.min(...pts.map((p) => p.y)) - 1; maxY = Math.max(...pts.map((p) => p.y)) + 1;
+    // what to fit: the arena floor (clean map), else the known things, else the whole map
+    let pts = [];
+    if (state.map && !mapUi.raw && state.map.floor && state.map.floor.length > 20) pts = state.map.floor.slice();
+    const things = [...state.waypoints, ...[...state.objects.values()].map((o) => o.position)];
+    if (state.charger) things.push(state.charger);
+    if (state.robot) things.push(state.robot.pose);
+    for (const p of things) pts.push([p.x, p.y]);
+    if (pts.length < 3 && !mapUi.raw) {                      // nothing yet: the map sections
+      for (const z of state.zones) for (const q of z.polygon || []) pts.push(q);
     }
-    const pad = 16;
-    const scale = Math.min((w - 2 * pad) / (maxX - minX), (h - 2 * pad) / (maxY - minY));
-    const ox = pad + ((w - 2 * pad) - (maxX - minX) * scale) / 2;
-    const oy = pad + ((h - 2 * pad) - (maxY - minY) * scale) / 2;
-    return {
-      scale, minX, minY, maxX, maxY,
-      sx: (x) => ox + (x - minX) * scale,
-      sy: (y) => oy + (maxY - y) * scale,
-    };
+    if (state.map && (mapUi.raw || pts.length < 3)) {
+      const i = state.map.info, x0 = i.origin.position.x, y0 = i.origin.position.y;
+      const x1 = x0 + i.width * i.resolution, y1 = y0 + i.height * i.resolution;
+      pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    }
+    if (!pts.length) pts = [[0, 0]];
+    const th = arenaAngle(), c = Math.cos(-th), s = Math.sin(-th);
+    const rot = ([x, y]) => [c * x - s * y, s * x + c * y];
+    let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
+    for (const p of pts) { const [u, v] = rot(p); umin = Math.min(umin, u); umax = Math.max(umax, u); vmin = Math.min(vmin, v); vmax = Math.max(vmax, v); }
+    const margin = 0.35;
+    umin -= margin; umax += margin; vmin -= margin; vmax += margin;
+    const pad = 12;
+    const scale = Math.min((w - 2 * pad) / (umax - umin), (h - 2 * pad) / (vmax - vmin));
+    const ox = pad + ((w - 2 * pad) - (umax - umin) * scale) / 2;
+    const oy = pad + ((h - 2 * pad) - (vmax - vmin) * scale) / 2;
+    const p = (x, y) => { const [u, v] = rot([x, y]); return [ox + (u - umin) * scale, oy + (vmax - v) * scale]; };
+    // canvas matrix for drawing in world coordinates: screen = A * world + b
+    const [bx, by] = p(0, 0);
+    const matrix = [scale * c, -scale * s, -scale * s, -scale * c, bx, by];
+    return { scale, angle: th, p, matrix };
   }
 
   function objectColor(o) {
@@ -312,17 +426,21 @@
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
+    if (state.map && !mapUi.raw) cleanMapImage();          // also gives the arena outline for the view
     view = computeView(rect.width, rect.height);
     const v = view;
 
     if (state.map) {
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(state.map.canvas, v.sx(v.minX), v.sy(v.maxY), (v.maxX - v.minX) * v.scale, (v.maxY - v.minY) * v.scale);
-    } else {
-      ctx.strokeStyle = '#E3E6EB';
-      ctx.lineWidth = 1;
-      for (let x = Math.ceil(v.minX); x <= v.maxX; x += 0.5) { ctx.beginPath(); ctx.moveTo(v.sx(x), v.sy(v.minY)); ctx.lineTo(v.sx(x), v.sy(v.maxY)); ctx.stroke(); }
-      for (let y = Math.ceil(v.minY); y <= v.maxY; y += 0.5) { ctx.beginPath(); ctx.moveTo(v.sx(v.minX), v.sy(y)); ctx.lineTo(v.sx(v.maxX), v.sy(y)); ctx.stroke(); }
+      const img = mapUi.raw ? state.map.raw : state.map.clean;
+      const k = mapUi.raw ? 1 : (state.map.cleanScale || 1);
+      const i = state.map.info, res = i.resolution;
+      ctx.save();
+      ctx.transform(...v.matrix);                            // world coordinates from here
+      ctx.translate(i.origin.position.x, i.origin.position.y + i.height * res);
+      ctx.scale(res / k, -res / k);                          // image rows go top-down
+      ctx.imageSmoothingEnabled = v.angle !== 0;             // smooth edges when turned
+      ctx.drawImage(img, 0, 0);
+      ctx.restore();
     }
 
     // map sections (narrator): light outline + name
@@ -331,11 +449,11 @@
       if (!z.polygon || z.polygon.length < 3) return;
       const col = ZONE_COLORS[k % ZONE_COLORS.length];
       ctx.beginPath();
-      z.polygon.forEach(([x, y], i) => (i ? ctx.lineTo(v.sx(x), v.sy(y)) : ctx.moveTo(v.sx(x), v.sy(y))));
+      z.polygon.forEach(([x, y], i) => (i ? ctx.lineTo(...v.p(x, y)) : ctx.moveTo(...v.p(x, y))));
       ctx.closePath();
-      ctx.fillStyle = col + '14';
+      ctx.fillStyle = col + '0F';
       ctx.fill();
-      ctx.strokeStyle = col + '99';
+      ctx.strokeStyle = col + '66';
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
       ctx.stroke();
@@ -344,7 +462,11 @@
       const cy = z.polygon.reduce((s, p) => s + p[1], 0) / z.polygon.length;
       ctx.fillStyle = col;
       ctx.font = '600 14px Inter, sans-serif';
-      ctx.fillText(z.name, v.sx(cx) - 5, v.sy(cy) + 5);
+      const [zx, zy] = v.p(cx, cy);
+      const label = z.description ? `${z.name} · ${z.description}` : z.name;
+      ctx.textAlign = 'center';
+      ctx.fillText(label, zx, zy + 5);
+      ctx.textAlign = 'start';
     });
 
     // patrol loop
@@ -353,27 +475,28 @@
       ctx.lineWidth = 2;
       ctx.setLineDash([7, 6]);
       ctx.beginPath();
-      state.waypoints.forEach((p, i) => (i ? ctx.lineTo(v.sx(p.x), v.sy(p.y)) : ctx.moveTo(v.sx(p.x), v.sy(p.y))));
+      state.waypoints.forEach((p, i) => (i ? ctx.lineTo(...v.p(p.x, p.y)) : ctx.moveTo(...v.p(p.x, p.y))));
       ctx.closePath();
       ctx.stroke();
       ctx.setLineDash([]);
       const current = state.robot ? state.robot.waypoint_index : -1;
       state.waypoints.forEach((p, i) => {
         ctx.beginPath();
-        ctx.arc(v.sx(p.x), v.sy(p.y), i === current ? 8 : 6, 0, Math.PI * 2);
+        const [px, py] = v.p(p.x, p.y);
+        ctx.arc(px, py, i === current ? 8 : 6, 0, Math.PI * 2);
         ctx.fillStyle = i === current ? '#2563EB' : '#fff';
         ctx.fill();
         ctx.strokeStyle = '#2563EB';
         ctx.stroke();
         ctx.fillStyle = '#1E3A8A';
         ctx.font = '11px Inter, sans-serif';
-        ctx.fillText(`WP${i + 1}`, v.sx(p.x) + 10, v.sy(p.y) - 8);
+        ctx.fillText(`WP${i + 1}`, px + 10, py - 8);
       });
     }
 
     // objects
     for (const o of state.objects.values()) {
-      const x = v.sx(o.position.x), y = v.sy(o.position.y);
+      const [x, y] = v.p(o.position.x, o.position.y);
       const color = objectColor(o);
       if (o.warning_level >= 2 && o.state !== 'REMOVED') {
         ctx.beginPath();
@@ -406,7 +529,7 @@
 
     // charger
     if (state.charger) {
-      const cx = v.sx(state.charger.x), cy = v.sy(state.charger.y);
+      const [cx, cy] = v.p(state.charger.x, state.charger.y);
       ctx.fillStyle = '#DCFCE7';
       ctx.strokeStyle = '#16A34A';
       ctx.lineWidth = 1.5;
@@ -427,7 +550,7 @@
     // robot
     if (state.robot) {
       const r = state.robot;
-      const x = v.sx(r.pose.x), y = v.sy(r.pose.y);
+      const [x, y] = v.p(r.pose.x, r.pose.y);
       const target = state.objects.get(r.current_object_id);
       if (target) {
         ctx.strokeStyle = '#6D28D9';
@@ -435,7 +558,7 @@
         ctx.setLineDash([4, 3]);
         ctx.beginPath();
         ctx.moveTo(x, y);
-        ctx.lineTo(v.sx(target.position.x), v.sy(target.position.y));
+        ctx.lineTo(...v.p(target.position.x, target.position.y));
         ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -450,7 +573,7 @@
       }
       ctx.save();
       ctx.translate(x, y);
-      ctx.rotate(-r.pose.theta);
+      ctx.rotate(-(r.pose.theta - v.angle));                 // the view is turned by v.angle
       ctx.beginPath();
       ctx.arc(0, 0, 12, 0, Math.PI * 2);
       ctx.fillStyle = '#15171A';
@@ -465,9 +588,17 @@
       ctx.fillText(r.robot_id || 'robot', x + 14, y - 12);
     }
 
-    ctx.fillStyle = '#4B5563';
+    // scale bar (1 m) and view note
+    const bar = v.scale, bx = 14, by = rect.height - 14;
+    ctx.strokeStyle = '#374151';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(bx, by - 5); ctx.lineTo(bx, by); ctx.lineTo(bx + bar, by); ctx.lineTo(bx + bar, by - 5);
+    ctx.stroke();
+    ctx.fillStyle = '#374151';
     ctx.font = '11px "JetBrains Mono", monospace';
-    ctx.fillText(state.map ? `frame: map · ${Number(state.map.info.resolution).toFixed(3)} m/px` : 'frame: map · grid 0.5 m (no /map yet)', 10, rect.height - 10);
+    ctx.fillText('1 m', bx + bar + 6, by);
+    if (!state.map) ctx.fillText('no /map yet', bx, 18);
   }
 
   $('map').addEventListener('click', (e) => {
@@ -476,7 +607,8 @@
     const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
     let best = null, bestD = 20;
     for (const o of state.objects.values()) {
-      const d = Math.hypot(view.sx(o.position.x) - cx, view.sy(o.position.y) - cy);
+      const [ox, oy] = view.p(o.position.x, o.position.y);
+      const d = Math.hypot(ox - cx, oy - cy);
       if (d < bestD) { best = o; bestD = d; }
     }
     if (best) { state.selected = best.marker_id; setTab('objects'); }
@@ -775,6 +907,15 @@
   $('btn-stop').addEventListener('click', () => trigger('/fleet/stop_patrol'));
   $('btn-unfollow').addEventListener('click', () => trigger('/fleet/stop_follow'));
   $('btn-home').addEventListener('click', () => trigger('/fleet/go_home'));
+  function setMapView(raw) {
+    mapUi.raw = raw;
+    mapUi.rotate = !raw;
+    $('map-raw').setAttribute('aria-pressed', String(raw));
+    $('map-rotate').setAttribute('aria-pressed', String(!raw));
+    scheduleRender();
+  }
+  $('map-raw').addEventListener('click', () => setMapView(true));
+  $('map-rotate').addEventListener('click', () => setMapView(false));
   $('cam-live').addEventListener('click', () => { camera.mode = 'live'; camera.failed = false; updateCamera(); });
   $('cam-det').addEventListener('click', () => { camera.mode = 'detections'; updateCamera(); });
   $('camera-img').addEventListener('error', () => {
