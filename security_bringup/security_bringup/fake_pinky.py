@@ -104,8 +104,11 @@ class FakePinky(Node):
         p('detect_rate', 10.0)
         p('lamp_topic', '/fleet/lamp')
         p('battery_voltage', 7.6)                    # V at start (8.4 full, 7.0 low)
-        p('battery_drain_moving', 0.0015)            # V/s while driving
-        p('battery_drain_idle', 0.0002)              # V/s standing still
+        # Fast-forward drain (about 30x the real robot, so a test takes minutes). The ratio
+        # is like Pinky's: the constant load (Pi 5, LiDAR, camera) is most of the power,
+        # driving adds a little (real patrol: 7.629 V driving vs 7.632 V standing).
+        p('battery_drain_moving', 0.0013)            # V/s while driving
+        p('battery_drain_idle', 0.0010)              # V/s standing still
         p('battery_charge_rate', 0.02)               # V/s with the cable plugged in
         p('battery_period', 2.0)                     # s between readings (Pinky: 5 s)
         p('dock_enabled', True)
@@ -407,9 +410,9 @@ class FakePinky(Node):
     def publish_battery(self):
         v = self.battery
         if self.moving and not self.plugged:
-            v -= 0.08                              # voltage sag under motor load
+            v -= 0.01                              # sag under motor load (real: tiny)
         if self.plugged:
-            v += 0.15                              # charger lifts the reading
+            v += 0.33                              # charger lifts the reading (real: 0.33 V)
         v += random.uniform(-0.02, 0.02)
         self.volt_pub.publish(Float32(data=float(v)))
         pct = max(0.0, min(100.0, (self.battery - 6.6) / (8.4 - 6.6) * 100.0))

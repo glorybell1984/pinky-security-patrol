@@ -34,6 +34,8 @@ task_manager:
     battery_critical_percent: 60.0  # 7.28 V: stop and go home now
     battery_charged_percent: 100.0  # 7.60 V: charged, patrol again
     battery_hysteresis: 0.05        # V above "low" before it counts as recovered
+    battery_charger_lift: 0.33      # charger lifts the reading 0.33 V (7.93 -> 7.60 V at unplug):
+                                    # while charging, 'charged' needs 7.60 + 0.33 V
     # used only with the percents set to -1:
     battery_low_voltage: 7.0
     battery_critical_voltage: 6.8
@@ -42,3 +44,16 @@ task_manager:
     battery_confirm: 5              # readings in a row before the level changes (5 s)
     auto_resume_after_charge: true  # dock with contacts: leave the dock and patrol when charged
                                     # (false = cable charging: operator unplugs and restarts)
+
+    # Energy (security_task_manager/energy_planner.py). Pinky's constant load (Pi 5, LiDAR,
+    # camera, Wi-Fi) is most of the power, so a lap costs about drain rate x lap time.
+    # Both are measured during the patrol; ~/patrol_logs/laps_<time>.csv has one row per lap.
+    energy_lap_aware: true          # at a lap start: home now if this lap + the way home
+                                    # would end below battery_low_percent (no half laps)
+    energy_follow_check: true       # skip a follow that would take the battery below critical
+    energy_home_seconds: 90.0       # guess until a trip home is timed (then the longest
+                                    # of the last 5 trips is used)
+    energy_follow_budget: 120.0     # s of following kept in reserve for one follow
+    energy_settle_seconds: 300.0    # after charging the reading sinks ~0.1 V in 4 min: no rate
+    energy_default_rate: 0.0        # V/min before it is measured (0 = unknown: plain 70 % rule)
+    energy_default_lap_seconds: 0.0 # s before a lap is timed (0 = unknown)

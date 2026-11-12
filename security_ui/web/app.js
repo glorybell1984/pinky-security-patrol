@@ -733,8 +733,33 @@
     }
     if (b.source === 'raw') sub += ' · raw readings';
     $('s-battery-sub').textContent = sub;
+    renderEnergy(b);
     $('s-battery-sub').title = b.slope_v_per_min != null
       ? `${b.slope_v_per_min > 0 ? '+' : ''}${b.slope_v_per_min} V/min over the last 2 min` : '';
+  }
+
+  // Energy per lap (task manager energy_planner): laps and minutes left above the low level
+  function renderEnergy(b) {
+    const e = b.energy;
+    const line = $('s-energy');
+    if (!e || b.mode === 'CHARGING') { line.textContent = ''; line.title = ''; return; }
+    const parts = [];
+    if (e.laps_left != null) parts.push(`≈ ${e.laps_left} lap${e.laps_left === 1 ? '' : 's'} left`);
+    if (e.minutes_left != null) parts.push(`${Math.round(e.minutes_left)} min`);
+    if (!parts.length) {
+      line.textContent = b.mode === 'PATROLLING' || b.mode === 'HOLDING'
+        ? (e.rate_v_per_min == null ? 'Measuring energy use…' : 'Timing the first full lap…') : '';
+    } else {
+      line.textContent = parts.join(' · ') + ' before going home';
+    }
+    const tip = [];
+    if (e.lap_seconds != null) tip.push(`Lap ${e.lap_seconds} s`);
+    if (e.lap_cost_v != null) tip.push(`${e.lap_cost_v} V per lap`);
+    if (e.rate_v_per_min != null) tip.push(`patrol drain ${e.rate_v_per_min} V/min`);
+    if (e.idle_rate_v_per_min != null) tip.push(`standing ${e.idle_rate_v_per_min} V/min`);
+    if (e.laps_per_charge != null) tip.push(`${e.laps_per_charge} laps per full charge`);
+    tip.push(`${e.laps_since_charge} laps since the last charge`);
+    line.title = tip.join(' · ');
   }
 
   function renderSim() {
@@ -755,10 +780,11 @@
     $('sim-battery').replaceChildren(el('div', { class: 'sim-row' }, [
       el('span', { class: 'label', text: `Battery ${fb.voltage.toFixed(2)} V${fb.plugged ? ' (plugged)' : ''}` }),
       el('span', { class: 'row-gap wrap' }, [
-        el('button', { type: 'button', class: 'btn btn-sm', text: 'Low', onclick: () => sendFake('battery 6.95') }),
-        el('button', { type: 'button', class: 'btn btn-sm', text: 'Critical', onclick: () => sendFake('battery 6.75') }),
+        el('button', { type: 'button', class: 'btn btn-sm', text: 'Almost low', title: '7.40 V: a lap or two above the 70 % level (lap-aware go-home)', onclick: () => sendFake('battery 7.40') }),
+        el('button', { type: 'button', class: 'btn btn-sm', text: 'Low', title: '7.33 V: below 70 %', onclick: () => sendFake('battery 7.33') }),
+        el('button', { type: 'button', class: 'btn btn-sm', text: 'Critical', title: '7.25 V: below 60 %', onclick: () => sendFake('battery 7.25') }),
         el('button', { type: 'button', class: 'btn btn-sm', text: fb.plugged ? 'Unplug' : 'Plug in', onclick: () => sendFake(fb.plugged ? 'unplug' : 'plug') }),
-        el('button', { type: 'button', class: 'btn btn-sm', text: 'Full', onclick: () => sendFake('battery 8.3') }),
+        el('button', { type: 'button', class: 'btn btn-sm', text: 'Full', onclick: () => sendFake('battery 7.62') }),
       ]),
     ]));
   }

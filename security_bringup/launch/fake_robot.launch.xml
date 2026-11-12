@@ -26,6 +26,7 @@
       <param from="$(var config_dir)/rules.yaml"/>
       <param name="view_distance" value="2.0"/>   <!-- fake camera sees 2.2 m -->
       <param name="auto_start_patrol" value="true"/>
+      <param name="energy_settle_seconds" value="20.0"/>   <!-- fake battery: no settling -->
     </node>
     <node pkg="security_task_manager" exec="narrator" output="screen">
       <param from="$(var config_dir)/narrator.yaml"/>
@@ -46,6 +47,7 @@
       <param from="$(var config_dir)/rules.yaml"/>
       <param name="camera_hfov" value="1.0423"/>   <!-- real Pinky camera, measured -->
       <param name="auto_start_patrol" value="true"/>
+      <param name="energy_settle_seconds" value="20.0"/>   <!-- fake battery: no settling -->
     </node>
     <node pkg="security_task_manager" exec="narrator" output="screen">
       <param from="$(var config_dir)/narrator.yaml"/>   <!-- police_map2 sections -->

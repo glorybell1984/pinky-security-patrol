@@ -18,6 +18,8 @@ Events returned by update():
     critical   filtered voltage <= critical_voltage  (stop the current task, charge now)
     recovered  back above low_voltage + hysteresis    (charger plugged in, or a false alarm)
     charged    filtered voltage >= charged_voltage    (ready to patrol again)
+               While on_charger is set the charger lifts the reading (Pinky: ~0.33 V),
+               so 'charged' then needs charged_voltage + charger_lift.
 """
 from collections import deque
 from dataclasses import dataclass, field
@@ -39,6 +41,7 @@ class BatteryConfig:
     curve: list = field(default_factory=lambda: [(6.8, 0.0), (7.6, 100.0)])
     trend_seconds: float = 120.0     # slope over this much history
     trend_threshold: float = 0.01    # V/min; above = charging, below minus = discharging
+    charger_lift: float = 0.0        # V the charger adds to the reading while plugged in
 
 
 class BatteryMonitor:
@@ -54,6 +57,7 @@ class BatteryMonitor:
         self.slope = None            # V/min
         self.trend = 'unknown'      # charging | discharging | steady | unknown
         self.charged = False
+        self.on_charger = False      # set by the owner (docked / cable plugged in)
         self._candidate = None
         self._count = 0
         self._charged_count = 0
@@ -150,7 +154,8 @@ class BatteryMonitor:
         else:
             self._candidate, self._count = None, 0
 
-        if self.voltage >= self.cfg.charged_voltage:
+        full = self.cfg.charged_voltage + (self.cfg.charger_lift if self.on_charger else 0.0)
+        if self.voltage >= full:
             self._charged_count += 1
             if not self.charged and self._charged_count >= self.cfg.confirm:
                 self.charged = True
@@ -160,6 +165,13 @@ class BatteryMonitor:
             if self.voltage < self.cfg.charged_voltage - self.cfg.hysteresis:
                 self.charged = False
         return events
+
+    def start_charging(self):
+        """Docked / plugged in: 'charged' must be reached again on the charger
+        (a reading lifted by the charger before the dock reported may have set it)."""
+        self.on_charger = True
+        self.charged = False
+        self._charged_count = 0
 
     def snapshot(self):
         return {

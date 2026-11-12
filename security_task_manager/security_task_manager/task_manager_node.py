@@ -30,6 +30,15 @@ Battery
     CRITICAL  stop following too and drive to the charger now
     At the charger the robot waits (CHARGING) until the operator presses
     Start patrol, because Pinky charges through a cable that a person plugs in.
+
+Energy (energy_planner.py)
+    Measures the drain rate (V/min) per activity and the lap time, then:
+    - at the start of each lap: goes home now if one more lap plus the way home
+      would end below the low level (so a lap is never cut off halfway)
+    - before a follow: skips it if a follow of energy_follow_budget seconds plus
+      the way home would go below the critical level
+    /fleet/battery gets 'energy' (laps left, minutes left, laps per charge), and
+    ~/patrol_logs/laps_<time>.csv one row per timed lap.
 """
 import json
 import os
@@ -56,6 +65,12 @@ from security_interfaces.msg import (ObjectDetectionArray, RobotState,
 from security_interfaces.srv import AcknowledgeObject, HoldAndSignal
 
 from .battery_monitor import CRITICAL, LOW, BatteryConfig, BatteryMonitor
+from .energy_planner import CHARGING as E_CHARGING
+from .energy_planner import FOLLOW as E_FOLLOW
+from .energy_planner import IDLE as E_IDLE
+from .energy_planner import OTHER as E_OTHER
+from .energy_planner import PATROL as E_PATROL
+from .energy_planner import EnergyConfig, EnergyPlanner
 from .event_logger import EventLogger
 from .object_registry import ObjectRegistry, RegistryConfig
 from .warning_rules import FOLLOW, HOLD, action_for
@@ -110,9 +125,17 @@ class TaskManager(Node):
         p('battery_critical_percent', -1.0)
         p('battery_charged_percent', -1.0)
         p('battery_hysteresis', 0.15)        # V above low before 'recovered'
+        p('battery_charger_lift', 0.33)      # V the charger adds to the reading (measured)
         p('battery_window', 3)               # median of the last N samples
         p('battery_confirm', 2)              # readings in a row before a level change
         p('auto_resume_after_charge', True)  # dock with contacts: back to patrol when charged
+        p('energy_lap_aware', True)          # go home at a lap start if the lap would end low
+        p('energy_follow_check', True)       # skip a follow the battery cannot afford
+        p('energy_home_seconds', 90.0)       # lap start (next to the dock) -> docked
+        p('energy_follow_budget', 120.0)     # s of following kept in reserve
+        p('energy_settle_seconds', 300.0)    # after charging: reading sinks back, no rate
+        p('energy_default_rate', 0.0)        # V/min until measured (0 = unknown)
+        p('energy_default_lap_seconds', 0.0)  # s until measured (0 = unknown)
         g = lambda name: self.get_parameter(name).value  # noqa: E731
 
         self.registry = ObjectRegistry(RegistryConfig(
@@ -141,6 +164,7 @@ class TaskManager(Node):
             curve=[(c[i], c[i + 1]) for c in [list(g('battery_curve'))]
                    for i in range(0, len(c) - 1, 2)],
             hysteresis=g('battery_hysteresis'),
+            charger_lift=g('battery_charger_lift'),
         ))
         pct = lambda name: g(name) if g(name) >= 0 else None  # noqa: E731
         self.battery.use_percent_thresholds(pct('battery_low_percent'),
@@ -154,6 +178,16 @@ class TaskManager(Node):
         self.battery_log = None
         self.battery_log_tick = 0
         self.auto_resume = g('auto_resume_after_charge')
+        self.energy = EnergyPlanner(EnergyConfig(
+            home_seconds=g('energy_home_seconds'),
+            follow_budget_seconds=g('energy_follow_budget'),
+            settle_seconds=g('energy_settle_seconds'),
+            default_rate_v_per_min=g('energy_default_rate'),
+            default_lap_seconds=g('energy_default_lap_seconds'),
+        ))
+        self.energy_lap_aware = g('energy_lap_aware')
+        self.energy_follow_check = g('energy_follow_check')
+        self.lap_log = None
 
         self.logger = EventLogger(g('log_dir'))
         self.get_logger().info(f'Event log: {self.logger.path}')
@@ -185,6 +219,7 @@ class TaskManager(Node):
             self.create_subscription(Float32, g('battery_raw_topic'),
                                      self.on_battery_raw, 10, callback_group=self.cb)
             self.open_battery_log(g('log_dir'))
+            self.open_lap_log(g('log_dir'))
         self.battery_pub = self.create_publisher(String, '/fleet/battery', 10)
         self.objects_pub = self.create_publisher(TrackedObjectArray, '/fleet/objects', 10)
         self.state_pub = self.create_publisher(RobotState, '/fleet/robot_state', 10)
@@ -259,12 +294,20 @@ class TaskManager(Node):
         with self.lock:
             if ev.get('event') == 'charger_reached' and self.mode == RETURNING:
                 self.mode = CHARGING
+                self.battery.start_charging()
+                self.energy.home_reached(time.monotonic())
             elif ev.get('event') == 'charger_failed' and self.mode == RETURNING:
                 self.mode = STOPPED
+                self.energy.home_failed()
 
     # ================================================================ inputs
     def on_robot_status(self, msg):
         self.robot_status = msg
+        if self.mode not in (PATROLLING, HOLDING) or msg.motion_state in (
+                'PAUSED', 'ESTOP', 'ERROR'):
+            self.energy.interrupt()            # this lap is not timed
+        if msg.patrol_pass > 0 and msg.patrol_pass != self.energy.pass_seen:
+            self.on_new_pass(msg.patrol_pass)
 
     def on_detections(self, msg):
         now = self.get_clock().now().nanoseconds * 1e-9
@@ -295,6 +338,17 @@ class TaskManager(Node):
                 self.emit({'event': 'follow_skipped', 'marker_id': ev['marker_id'],
                            'message': f"Not following #{ev['marker_id']}: {why}"})
                 return
+            if self.energy_follow_check:
+                c = self.battery.cfg
+                ok, needed = self.energy.can_follow(self.battery.voltage, c.critical_voltage)
+                if ok is False:
+                    self.emit({'event': 'follow_skipped', 'marker_id': ev['marker_id'],
+                               'message': f"Not following #{ev['marker_id']}: battery "
+                                          f'{self.battery.voltage:.2f} V, a follow of '
+                                          f'{self.energy.cfg.follow_budget_seconds:.0f} s and '
+                                          f'the way home need about {needed:.3f} V, that would '
+                                          f'go below {c.critical_voltage:.2f} V'})
+                    return
             if self.mode == RETURNING:
                 self.charge_after_follow = True   # follow first, then back to the charger
             self.start_follow(ev['marker_id'])
@@ -316,9 +370,21 @@ class TaskManager(Node):
             self.battery_source = 'raw'
         self.on_battery_voltage(float(msg.data))
 
+    def energy_activity(self):
+        if self.battery.trend == 'charging' or self.mode == CHARGING:
+            return E_CHARGING
+        if self.robot_status.motion_state in ('PAUSED', 'ESTOP', 'ERROR'):
+            return E_IDLE
+        return {PATROLLING: E_PATROL, HOLDING: E_PATROL, FOLLOWING: E_FOLLOW,
+                STOPPED: E_IDLE}.get(self.mode, E_OTHER)
+
     def on_battery_voltage(self, volts):
         with self.lock:
-            events = self.battery.update(volts, time.monotonic())
+            t = time.monotonic()
+            # on the dock or with the cable in, the charger lifts the reading
+            self.battery.on_charger = self.mode == CHARGING or self.battery.trend == 'charging'
+            events = self.battery.update(volts, t)
+            self.energy.add(t, self.battery.voltage, self.energy_activity())
         for name in events:
             self.on_battery_event(name)
 
@@ -332,6 +398,43 @@ class TaskManager(Node):
                                    'source,motion,task\n')
         except OSError as e:
             self.get_logger().warn(f'battery log not written: {e}')
+
+    def open_lap_log(self, log_dir):
+        try:
+            folder = os.path.expanduser(log_dir)
+            path = os.path.join(folder, datetime.now().strftime('laps_%Y%m%d_%H%M%S.csv'))
+            self.lap_log = open(path, 'w', buffering=1)
+            self.lap_log.write('time,pass,seconds,v_start,v_end,drop_v,rate_v_per_min,'
+                               'laps_left\n')
+        except OSError as e:
+            self.get_logger().warn(f'lap log not written: {e}')
+
+    def on_new_pass(self, patrol_pass):
+        """A patrol lap ended (or the first pass number arrived): time the lap and
+        decide whether the battery allows one more."""
+        with self.lock:
+            v = self.battery.voltage
+            lap = self.energy.on_pass(time.monotonic(), patrol_pass, v)
+            c = self.battery.cfg
+            laps_left = self.energy.laps_left(v, c.low_voltage)
+            rate = self.energy.rate()
+            if lap is not None:
+                if self.lap_log is not None:
+                    self.lap_log.write(','.join(str(x) for x in (
+                        datetime.now().isoformat(timespec='seconds'), lap.patrol_pass,
+                        round(lap.seconds, 1), round(lap.v_start, 3), round(lap.v_end, 3),
+                        round(lap.drop, 4), round(rate, 5) if rate is not None else '',
+                        laps_left if laps_left is not None else '')) + '\n')
+                left = f', about {laps_left} more' if laps_left is not None else ''
+                self.emit({'event': 'lap_done', 'message': f'Lap {lap.patrol_pass} done in '
+                           f'{lap.seconds:.0f} s{left}'})
+            if not (self.energy_lap_aware and self.mode == PATROLLING
+                    and self.battery.level not in (LOW, CRITICAL) and v is not None):
+                return
+            ok, needed = self.energy.another_lap(v, c.low_voltage)
+        if ok is False:
+            self.go_charge(f'one more lap and the way home need about {needed:.3f} V, '
+                           f'it would end below {c.low_voltage:.2f} V')
 
     def log_battery(self, data):
         self.battery_log_tick += 1
@@ -391,6 +494,7 @@ class TaskManager(Node):
                     t.cancel()
             self.hold_timer = self.restart_timer = None
             self.stop_patrol()
+        self.energy.home_started(time.monotonic())
         self.emit({'event': 'go_charge', 'message': 'Going home (sent by operator)'
                    if reason == 'operator' else f'Going home to charge ({reason})'})
         self.request_charger()
@@ -690,6 +794,9 @@ class TaskManager(Node):
         data['mode'] = self.mode
         data['auto_resume'] = self.auto_resume
         data['source'] = self.battery_source
+        with self.lock:
+            data['energy'] = self.energy.snapshot(self.battery.cfg.low_voltage,
+                                                  self.battery.cfg.charged_voltage)
         self.battery_pub.publish(String(data=json.dumps(data)))
         self.log_battery(data)
 

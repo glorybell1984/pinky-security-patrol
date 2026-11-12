@@ -109,3 +109,27 @@ def test_percent_thresholds_follow_the_curve():
     assert m.update(7.38) == [] and m.level == 'LOW'          # inside the hysteresis
     assert m.update(7.42) == ['recovered']
     assert m.update(7.27) == ['critical']
+
+
+def test_charger_lift_does_not_count_as_charged():
+    """Pinky's charger lifts the reading 0.33 V: 7.75 V on the charger is ~7.42 V."""
+    mon = BatteryMonitor(BatteryConfig(low_voltage=7.36, critical_voltage=7.28,
+                                       charged_voltage=7.60, confirm=2, window=1,
+                                       hysteresis=0.05, charger_lift=0.33))
+    mon.update(7.42)
+    mon.on_charger = True
+    assert 'charged' not in feed(mon, [7.75, 7.75, 7.80, 7.90])
+    assert 'charged' in feed(mon, [7.94, 7.95])
+    off = BatteryMonitor(BatteryConfig(charged_voltage=7.60, confirm=2, window=1))
+    assert 'charged' in feed(off, [7.65, 7.65])               # not on a charger: as before
+
+
+def test_charged_must_be_reached_again_after_docking():
+    mon = BatteryMonitor(BatteryConfig(charged_voltage=7.60, confirm=2, window=1,
+                                       charger_lift=0.33))
+    feed(mon, [7.42, 7.75, 7.75])        # lifted reading before the dock reported
+    assert mon.charged
+    mon.start_charging()
+    assert not mon.charged
+    assert feed(mon, [7.80, 7.85]) == []
+    assert feed(mon, [7.95, 7.95]) == ['charged']
