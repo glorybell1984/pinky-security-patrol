@@ -10,6 +10,13 @@ jumped between 7.2 and 7.7 V (2026-11-12). This node reads the same sensor
     /battery/voltage_avg   std_msgs/Float32   median of the window
     /battery/voltage_span  std_msgs/Float32   max - min in the window (noise, V)
 
+Why Pinky's own reading is off: pinkylib.Battery.get_voltage() AVERAGES 20 ADC
+samples, and now and then one sample comes back as 0. One bad sample lowers the
+average by 1/20: readings of a resting robot alternated between ~7.52 V and
+~7.19 V (ratio 0.956, the same with the charger on: 7.87 / 7.53), and two bad
+samples gave 6.86 V. This node reads the 20 samples itself and takes their
+MEDIAN (same register and conversion as pinkylib), so bad samples drop out.
+
 Pinky's battery_publisher keeps running; both only read the battery register.
 
     scp battery_sampler.py pinky@<robot-ip>:~/
@@ -23,6 +30,19 @@ from collections import deque
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32
+
+
+# pinkylib.Battery: 12-bit ADC, 4.096 V reference, divider 13/28
+COUNTS_TO_VOLTS = 4.096 / 4096.0 / (13.0 / 28.0)
+
+
+def voltage_from_counts(counts):
+    """Median of raw ADC counts -> battery volts. Zero / missing samples are
+    dropped first (a failed conversion reads 0); None if nothing usable."""
+    good = sorted(c for c in counts if c)
+    if len(good) < max(3, len(counts) // 2):
+        return None
+    return statistics.median(good) * COUNTS_TO_VOLTS
 
 
 class WindowMedian:
@@ -67,19 +87,34 @@ class BatterySampler(Node):
         self.create_timer(1.0 / g('publish_rate'), self.publish)
         self.create_timer(30.0, self.report)
         self.errors = 0
+        self.rejected = 0
         self.get_logger().info(f"Battery sampler: {g('rate'):.0f} readings/s, median of "
                                f"{g('window'):.0f} s -> /battery/voltage_avg")
 
+    def read_voltage(self):
+        """Median of 20 raw samples when pinkylib exposes them, else its average."""
+        read = getattr(self.battery, '_read_adc_channel', None)
+        if read is None:
+            return self.battery.get_voltage()
+        return voltage_from_counts([read(self.battery.REG_BATTERY) for _ in range(20)])
+
     def sample(self):
         try:
-            v = self.battery.get_voltage()
+            v = self.read_voltage()
         except Exception as e:  # noqa: BLE001  (I2C hiccup: skip this reading)
             self.errors += 1
             if self.errors in (1, 10, 100):
                 self.get_logger().warn(f'battery read failed ({self.errors}x): {e}')
             return
-        if v is not None and v > 0.5:
+        # A 2-cell pack cannot read outside 5-9.5 V: such values are garbled I2C
+        # reads (seen: one reading 6.6 V off while two programs read the chip).
+        if v is not None and 5.0 <= v <= 9.5:
             self.win.add(time.monotonic(), float(v))
+        elif v is not None:
+            self.rejected += 1
+            if self.rejected in (1, 10, 100, 1000):
+                self.get_logger().warn(f'impossible battery reading {v:.2f} V ignored '
+                                       f'({self.rejected}x)')
 
     def publish(self):
         m = self.win.median()
