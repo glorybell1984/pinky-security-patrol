@@ -94,12 +94,12 @@ change the status. If the result shows a new limit, add a row.
 
 | # | Capability | Test | Result | Limit | Workaround | Status |
 |---|---|---|---|---|---|---|
-| B1 | Battery reading rate | `ros2 topic hz /battery/voltage` | Every 5 s (code) | Slow reaction | Median filter; `/batt_state` 100 Hz from `pinky_sensor_adc` | ✅ |
+| B1 | Battery reading | pinkylib source; 50 readings; plug/unplug | **One reading = average of 20 ADC samples; a sample that reads 0 lowers it 5 %**: a resting robot alternated 7.52 / 7.19 V (7.87 / 7.53 V charging), once 6.86 V (2026-11-12) | Percent jumped 50-100 % at random | `battery_sampler.py`: median of the raw samples, then of 5 s -> spread 0.02 V | ✅ |
 | B2 | Charging status | `battery_publisher` code | Not reported | Can't tell "charging" directly | Voltage rise on contact | ✅ |
-| B3 | Voltage under load | Echo voltage driving vs stopped | | Sag looks like low battery | Filter, confirm 2 readings | ⏳ |
-| B4 | **Patrol time on one charge** | Full battery, patrol until 7.0 V | | Sets demo length | Go home at 7.0 V | ⏳ |
+| B3 | Voltage under load | Patrol 4 min, voltage vs wheel speed | Driving 7.629 V vs standing 7.632 V; -0.009 V in 4 min at 0.12 m/s (2026-11-12) | Small at patrol speed | 5 s median, 5 readings to change level | ✅ |
+| B4 | **Patrol time on one charge** | Full battery, patrol until the go-home level | Go home at 70 % of Pinky's scale (7.36 V, maker's advice) | Sets demo length | battery_<time>.csv logs every 10 s | ⏳ |
 | B5 | Voltage jump on contact | Echo voltage, put robot on dock | | Must be > 0.12 V | `dock_contact_rise` | ⏳ |
-| B6 | Voltage while charging | Compare reading on dock vs after | | Reads high, "charged" early | Raise `battery_charged_voltage` | ⏳ |
+| B6 | Voltage while charging | Plug / unplug, robot on | Charging works with the robot on (+0.015 V/min). The charger lifts the reading ~0.33 V: unplugging dropped 7.93 -> 7.60 V at once, then settled to 7.49 V in 4 min | "Full" while plugged is not full; looks like a fast drop after unplugging | Trend on the dashboard; judge charge after unplugging | ✅ |
 | B7 | Charge time 7.0 -> 8.0 V | Stopwatch | | Robot off patrol | | ⏳ |
 | B8 | Docking success, real robot | Go home tries | 2026-11-11: failed (not lined up, wall bumps) before the fixes in C14, C15, N6, N11 | Close-range blur, marker angle noise, AMCL near the dock | Two-phase docking, median while still, marker relocalization | ⏳ retest |
 | B9 | Docking time | Staging -> contact | Fake: 9-14 s | | | 🧪 |

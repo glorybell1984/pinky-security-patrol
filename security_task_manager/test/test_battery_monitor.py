@@ -95,3 +95,17 @@ def test_trend_tells_charging_from_draining():
     for k in range(30):
         m.update(7.3, t=float(k))
     assert m.trend == 'unknown'                   # less than half the window yet
+
+
+def test_percent_thresholds_follow_the_curve():
+    """Pinky's maker: keep it above 70 % (of Pinky's 6.8-7.6 V scale) -> 7.36 V."""
+    m = _Mon(_Cfg(window=1, confirm=1, hysteresis=0.05))
+    m.use_percent_thresholds(70.0, 60.0, 100.0)
+    assert abs(m.cfg.low_voltage - 7.36) < 1e-9
+    assert abs(m.cfg.critical_voltage - 7.28) < 1e-9
+    assert abs(m.cfg.charged_voltage - 7.60) < 1e-9
+    assert m.update(7.63) == ['charged'] and m.level == 'OK'  # this morning: above 100 %
+    assert m.update(7.35) == ['low']
+    assert m.update(7.38) == [] and m.level == 'LOW'          # inside the hysteresis
+    assert m.update(7.42) == ['recovered']
+    assert m.update(7.27) == ['critical']

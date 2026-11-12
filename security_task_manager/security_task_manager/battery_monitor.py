@@ -68,6 +68,25 @@ class BatteryMonitor:
             return self.level if v > c.critical_voltage else CRITICAL
         return OK
 
+    def voltage_at(self, percent):
+        """Inverse of percent_of: the voltage where the curve reaches `percent`."""
+        pts = sorted(self.cfg.curve)
+        if percent <= pts[0][1]:
+            return float(pts[0][0])
+        for (v0, p0), (v1, p1) in zip(pts, pts[1:]):
+            if percent <= p1:
+                return float(v0 + (v1 - v0) * (percent - p0) / (p1 - p0)) if p1 != p0 else float(v0)
+        return float(pts[-1][0])
+
+    def use_percent_thresholds(self, low, critical, charged):
+        """Set the voltage thresholds from percentages on the curve (None = keep)."""
+        if low is not None:
+            self.cfg.low_voltage = self.voltage_at(low)
+        if critical is not None:
+            self.cfg.critical_voltage = self.voltage_at(critical)
+        if charged is not None:
+            self.cfg.charged_voltage = self.voltage_at(charged)
+
     def percent_of(self, v):
         """Percent from the curve (clamped to 0..100)."""
         pts = sorted(self.cfg.curve)

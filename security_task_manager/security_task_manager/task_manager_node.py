@@ -105,6 +105,11 @@ class TaskManager(Node):
         p('battery_low_voltage', 7.0)        # go and charge after the current task
         p('battery_critical_voltage', 6.8)   # go and charge now (Pinky warns here)
         p('battery_charged_voltage', 8.0)    # ready to patrol again
+        # thresholds as percent of battery_curve; < 0 = use the voltages above
+        p('battery_low_percent', -1.0)
+        p('battery_critical_percent', -1.0)
+        p('battery_charged_percent', -1.0)
+        p('battery_hysteresis', 0.15)        # V above low before 'recovered'
         p('battery_window', 3)               # median of the last N samples
         p('battery_confirm', 2)              # readings in a row before a level change
         p('auto_resume_after_charge', True)  # dock with contacts: back to patrol when charged
@@ -135,7 +140,15 @@ class TaskManager(Node):
             confirm=g('battery_confirm'),
             curve=[(c[i], c[i + 1]) for c in [list(g('battery_curve'))]
                    for i in range(0, len(c) - 1, 2)],
+            hysteresis=g('battery_hysteresis'),
         ))
+        pct = lambda name: g(name) if g(name) >= 0 else None  # noqa: E731
+        self.battery.use_percent_thresholds(pct('battery_low_percent'),
+                                            pct('battery_critical_percent'),
+                                            pct('battery_charged_percent'))
+        c = self.battery.cfg
+        self.get_logger().info(f'Battery: go home at {c.low_voltage:.2f} V, now at '
+                               f'{c.critical_voltage:.2f} V, charged at {c.charged_voltage:.2f} V')
         self.battery_source = None           # 'avg' or 'raw'
         self.battery_avg_time = 0.0
         self.battery_log = None

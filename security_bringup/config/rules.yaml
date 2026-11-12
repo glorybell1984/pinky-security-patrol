@@ -28,9 +28,16 @@ task_manager:
     battery_voltage_topic: /battery/voltage_avg
     battery_raw_topic: /battery/voltage    # used only while no voltage_avg arrives
     battery_curve: [6.8, 0.0, 7.6, 100.0]  # voltage, percent pairs; now Pinky's own straight line
-    battery_low_voltage: 7.0        # finish the current follow, then go to the charger
-    battery_critical_voltage: 6.8   # stop everything and go to the charger now
-    battery_charged_voltage: 8.0    # "charged" message on the dashboard
+    # Go-home levels in percent of battery_curve (Pinky's own scale: 6.8 V = 0 %,
+    # 7.6 V = 100 %). Pinky's maker advises keeping the battery above 70 %.
+    battery_low_percent: 70.0       # 7.36 V: finish the current task, then go home
+    battery_critical_percent: 60.0  # 7.28 V: stop and go home now
+    battery_charged_percent: 100.0  # 7.60 V: charged, patrol again
+    battery_hysteresis: 0.05        # V above "low" before it counts as recovered
+    # used only with the percents set to -1:
+    battery_low_voltage: 7.0
+    battery_critical_voltage: 6.8
+    battery_charged_voltage: 8.0
     battery_window: 5               # median of the last 5 readings (1 per s)
     battery_confirm: 5              # readings in a row before the level changes (5 s)
     auto_resume_after_charge: true  # dock with contacts: leave the dock and patrol when charged
